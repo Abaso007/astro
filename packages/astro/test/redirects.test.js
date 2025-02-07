@@ -1,6 +1,7 @@
-import { expect } from 'chai';
-import { loadFixture } from './test-utils.js';
+import assert from 'node:assert/strict';
+import { after, before, describe, it } from 'node:test';
 import testAdapter from './test-adapter.js';
+import { loadFixture } from './test-utils.js';
 
 describe('Astro.redirect', () => {
 	/** @type {import('./test-utils').Fixture} */
@@ -9,14 +10,19 @@ describe('Astro.redirect', () => {
 	describe('output: "server"', () => {
 		before(async () => {
 			fixture = await loadFixture({
-				root: './fixtures/ssr-redirect/',
+				root: './fixtures/redirects/',
 				output: 'server',
 				adapter: testAdapter(),
 				redirects: {
 					'/api/redirect': '/test',
-				},
-				experimental: {
-					redirects: true,
+					'/external/redirect': 'https://example.com/',
+					// for example, the real file handling the target path may be called
+					// src/pages/not-verbatim/target1/[something-other-than-dynamic].astro
+					'/source/[dynamic]': '/not-verbatim/target1/[dynamic]',
+					// may be called src/pages/not-verbatim/target2/[abc]/[xyz].astro
+					'/source/[dynamic]/[route]': '/not-verbatim/target2/[dynamic]/[route]',
+					// may be called src/pages/not-verbatim/target3/[...rest].astro
+					'/source/[...spread]': '/not-verbatim/target3/[...spread]',
 				},
 			});
 			await fixture.build();
@@ -26,8 +32,16 @@ describe('Astro.redirect', () => {
 			const app = await fixture.loadTestAdapterApp();
 			const request = new Request('http://example.com/secret');
 			const response = await app.render(request);
-			expect(response.status).to.equal(302);
-			expect(response.headers.get('location')).to.equal('/login');
+			assert.equal(response.status, 302);
+			assert.equal(response.headers.get('location'), '/login');
+		});
+
+		it('Allows external redirect', async () => {
+			const app = await fixture.loadTestAdapterApp();
+			const request = new Request('http://example.com/external/redirect');
+			const response = await app.render(request);
+			assert.equal(response.status, 301);
+			assert.equal(response.headers.get('location'), 'https://example.com/');
 		});
 
 		it('Warns when used inside a component', async () => {
@@ -36,10 +50,11 @@ describe('Astro.redirect', () => {
 			const response = await app.render(request);
 			try {
 				await response.text();
-				expect(false).to.equal(true);
+				assert.equal(false, true);
 			} catch (e) {
-				expect(e.message).to.equal(
-					'The response has already been sent to the browser and cannot be altered.'
+				assert.equal(
+					e.message,
+					'The response has already been sent to the browser and cannot be altered.',
 				);
 			}
 		});
@@ -49,8 +64,8 @@ describe('Astro.redirect', () => {
 				const app = await fixture.loadTestAdapterApp();
 				const request = new Request('http://example.com/api/redirect');
 				const response = await app.render(request);
-				expect(response.status).to.equal(301);
-				expect(response.headers.get('Location')).to.equal('/');
+				assert.equal(response.status, 301);
+				assert.equal(response.headers.get('Location'), '/test');
 			});
 
 			it('Uses 308 for non-GET methods', async () => {
@@ -59,7 +74,38 @@ describe('Astro.redirect', () => {
 					method: 'POST',
 				});
 				const response = await app.render(request);
-				expect(response.status).to.equal(308);
+				assert.equal(response.status, 308);
+			});
+
+			it('Forwards params to the target path - single param', async () => {
+				const app = await fixture.loadTestAdapterApp();
+				const request = new Request('http://example.com/source/x');
+				const response = await app.render(request);
+				assert.equal(response.headers.get('Location'), '/not-verbatim/target1/x');
+			});
+
+			it('Forwards params to the target path - multiple params', async () => {
+				const app = await fixture.loadTestAdapterApp();
+				const request = new Request('http://example.com/source/x/y');
+				const response = await app.render(request);
+				assert.equal(response.headers.get('Location'), '/not-verbatim/target2/x/y');
+			});
+
+			it('Forwards params to the target path - spread param', async () => {
+				const app = await fixture.loadTestAdapterApp();
+				const request = new Request('http://example.com/source/x/y/z');
+				const response = await app.render(request);
+				assert.equal(response.headers.get('Location'), '/not-verbatim/target3/x/y/z');
+			});
+
+			it('Forwards params to the target path - special characters', async () => {
+				const app = await fixture.loadTestAdapterApp();
+				const request = new Request('http://example.com/source/Las Vegas’');
+				const response = await app.render(request);
+				assert.equal(
+					response.headers.get('Location'),
+					'/not-verbatim/target1/Las%20Vegas%E2%80%99',
+				);
 			});
 		});
 	});
@@ -69,12 +115,10 @@ describe('Astro.redirect', () => {
 			before(async () => {
 				process.env.STATIC_MODE = true;
 				fixture = await loadFixture({
-					root: './fixtures/ssr-redirect/',
+					root: './fixtures/redirects/',
 					output: 'static',
-					experimental: {
-						redirects: true,
-					},
 					redirects: {
+						'/old': '/test',
 						'/': '/test',
 						'/one': '/test',
 						'/two': '/test',
@@ -83,71 +127,92 @@ describe('Astro.redirect', () => {
 							status: 302,
 							destination: '/test',
 						},
+						'/more/old/[dynamic]': '/more/[dynamic]',
+						'/more/old/[dynamic]/[route]': '/more/[dynamic]/[route]',
+						'/more/old/[...spread]': '/more/new/[...spread]',
+						'/external/redirect': 'https://example.com/',
 					},
 				});
 				await fixture.build();
 			});
 
+			it("Minifies the HTML emitted when a page that doesn't exist is emitted", async () => {
+				const html = await fixture.readFile('/old/index.html');
+				assert.equal(html.includes('\n'), false);
+			});
+
 			it('Includes the meta refresh tag in Astro.redirect pages', async () => {
 				const html = await fixture.readFile('/secret/index.html');
-				expect(html).to.include('http-equiv="refresh');
-				expect(html).to.include('url=/login');
+				assert.equal(html.includes('http-equiv="refresh'), true);
+				assert.equal(html.includes('url=/login'), true);
 			});
 
 			it('Includes the meta noindex tag', async () => {
 				const html = await fixture.readFile('/secret/index.html');
-				expect(html).to.include('name="robots');
-				expect(html).to.include('content="noindex');
+				assert.equal(html.includes('name="robots'), true);
+				assert.equal(html.includes('content="noindex'), true);
 			});
 
 			it('Includes a link to the new pages for bots to follow', async () => {
 				const html = await fixture.readFile('/secret/index.html');
-				expect(html).to.include('<a href="/login">');
+				assert.equal(html.includes('<a href="/login">'), true);
 			});
 
 			it('Includes a canonical link', async () => {
 				const html = await fixture.readFile('/secret/index.html');
-				expect(html).to.include('<link rel="canonical" href="/login">');
+				assert.equal(html.includes('<link rel="canonical" href="/login">'), true);
 			});
 
 			it('A 302 status generates a "temporary redirect" through a short delay', async () => {
 				// https://developers.google.com/search/docs/crawling-indexing/301-redirects#metarefresh
 				const html = await fixture.readFile('/secret/index.html');
-				expect(html).to.include('content="2;url=/login"');
+				assert.equal(html.includes('content="2;url=/login"'), true);
 			});
 
 			it('Includes the meta refresh tag in `redirect` config pages', async () => {
 				let html = await fixture.readFile('/one/index.html');
-				expect(html).to.include('http-equiv="refresh');
-				expect(html).to.include('url=/test');
+				assert.equal(html.includes('http-equiv="refresh'), true);
+				assert.equal(html.includes('url=/test'), true);
 
 				html = await fixture.readFile('/two/index.html');
-				expect(html).to.include('http-equiv="refresh');
-				expect(html).to.include('url=/test');
+				assert.equal(html.includes('http-equiv="refresh'), true);
+				assert.equal(html.includes('url=/test'), true);
 
 				html = await fixture.readFile('/three/index.html');
-				expect(html).to.include('http-equiv="refresh');
-				expect(html).to.include('url=/test');
+				assert.equal(html.includes('http-equiv="refresh'), true);
+				assert.equal(html.includes('url=/test'), true);
 
 				html = await fixture.readFile('/index.html');
-				expect(html).to.include('http-equiv="refresh');
-				expect(html).to.include('url=/test');
+				assert.equal(html.includes('http-equiv="refresh'), true);
+				assert.equal(html.includes('url=/test'), true);
 			});
 
 			it('Generates page for dynamic routes', async () => {
 				let html = await fixture.readFile('/blog/one/index.html');
-				expect(html).to.include('http-equiv="refresh');
-				expect(html).to.include('url=/articles/one');
+				assert.equal(html.includes('http-equiv="refresh'), true);
+				assert.equal(html.includes('url=/articles/one'), true);
 
 				html = await fixture.readFile('/blog/two/index.html');
-				expect(html).to.include('http-equiv="refresh');
-				expect(html).to.include('url=/articles/two');
+				assert.equal(html.includes('http-equiv="refresh'), true);
+				assert.equal(html.includes('url=/articles/two'), true);
 			});
 
 			it('Generates redirect pages for redirects created by middleware', async () => {
 				let html = await fixture.readFile('/middleware-redirect/index.html');
-				expect(html).to.include('http-equiv="refresh');
-				expect(html).to.include('url=/test');
+				assert.equal(html.includes('http-equiv="refresh'), true);
+				assert.equal(html.includes('url=/test'), true);
+			});
+
+			it('falls back to spread rule when dynamic rules should not match', async () => {
+				const html = await fixture.readFile('/more/old/welcome/world/index.html');
+				assert.equal(html.includes('http-equiv="refresh'), true);
+				assert.equal(html.includes('url=/more/new/welcome/world'), true);
+			});
+
+			it('supports redirecting to an external destination', async () => {
+				const html = await fixture.readFile('/external/redirect/index.html');
+				assert.equal(html.includes('http-equiv="refresh'), true);
+				assert.equal(html.includes('url=https://example.com/'), true);
 			});
 		});
 
@@ -157,13 +222,13 @@ describe('Astro.redirect', () => {
 			before(async () => {
 				process.env.STATIC_MODE = true;
 				fixture = await loadFixture({
-					root: './fixtures/ssr-redirect/',
+					root: './fixtures/redirects/',
 					output: 'static',
-					experimental: {
-						redirects: true,
-					},
 					redirects: {
 						'/one': '/',
+						'/more/old/[dynamic]': '/more/[dynamic]',
+						'/more/old/[dynamic]/[route]': '/more/[dynamic]/[route]',
+						'/more/old/[...spread]': '/more/new/[...spread]',
 					},
 				});
 				devServer = await fixture.startDevServer();
@@ -173,11 +238,51 @@ describe('Astro.redirect', () => {
 				await devServer.stop();
 			});
 
-			it('Returns 301', async () => {
+			it('performs simple redirects', async () => {
 				let res = await fixture.fetch('/one', {
 					redirect: 'manual',
 				});
-				expect(res.status).to.equal(301);
+				assert.equal(res.status, 301);
+				assert.equal(res.headers.get('Location'), '/');
+			});
+
+			it('performs dynamic redirects', async () => {
+				const response = await fixture.fetch('/more/old/hello', { redirect: 'manual' });
+				assert.equal(response.status, 301);
+				assert.equal(response.headers.get('Location'), '/more/hello');
+			});
+
+			it('performs dynamic redirects with special characters', async () => {
+				// encodeURI("/more/old/’")
+				const response = await fixture.fetch('/more/old/%E2%80%99', { redirect: 'manual' });
+				assert.equal(response.status, 301);
+				assert.equal(response.headers.get('Location'), '/more/%E2%80%99');
+			});
+
+			it('performs dynamic redirects with multiple params', async () => {
+				const response = await fixture.fetch('/more/old/hello/world', { redirect: 'manual' });
+				assert.equal(response.headers.get('Location'), '/more/hello/world');
+			});
+
+			it.skip('falls back to spread rule when dynamic rules should not match', async () => {
+				const response = await fixture.fetch('/more/old/welcome/world', { redirect: 'manual' });
+				assert.equal(response.headers.get('Location'), '/more/new/welcome/world');
+			});
+		});
+
+		describe('with i18n, build step', () => {
+			before(async () => {
+				process.env.STATIC_MODE = true;
+				fixture = await loadFixture({
+					root: './fixtures/redirects-i18n/',
+				});
+				await fixture.build();
+			});
+
+			it('should render the external redirect', async () => {
+				const html = await fixture.readFile('/mytest/index.html');
+				assert.equal(html.includes('http-equiv="refresh'), true);
+				assert.equal(html.includes('url=https://example.com/about'), true);
 			});
 		});
 	});
@@ -186,7 +291,7 @@ describe('Astro.redirect', () => {
 		before(async () => {
 			process.env.STATIC_MODE = true;
 			fixture = await loadFixture({
-				root: './fixtures/ssr-redirect/',
+				root: './fixtures/redirects/',
 				output: 'static',
 				redirects: {
 					'/one': '/',
@@ -194,19 +299,22 @@ describe('Astro.redirect', () => {
 				build: {
 					redirects: false,
 				},
-				experimental: {
-					redirects: true,
-				},
 			});
 			await fixture.build();
 		});
 
-		it('Does not output redirect HTML', async () => {
+		it('Does not output redirect HTML for redirect routes', async () => {
 			let oneHtml = undefined;
 			try {
 				oneHtml = await fixture.readFile('/one/index.html');
 			} catch {}
-			expect(oneHtml).be.an('undefined');
+			assert.equal(oneHtml, undefined);
+		});
+
+		it('Outputs redirect HTML for user routes that return a redirect response', async () => {
+			let secretHtml = await fixture.readFile('/secret/index.html');
+			assert.equal(secretHtml.includes('Redirecting from <code>/secret/</code>'), true);
+			assert.equal(secretHtml.includes('to <code>/login</code>'), true);
 		});
 	});
 });

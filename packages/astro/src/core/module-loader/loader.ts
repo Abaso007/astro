@@ -1,6 +1,6 @@
-import { EventEmitter } from 'events';
-import type * as fs from 'fs';
-import type { TypedEventEmitter } from '../../@types/typed-emitter';
+import { EventEmitter } from 'node:events';
+import type * as fs from 'node:fs';
+import type { TypedEventEmitter } from '../../types/typed-emitter.js';
 
 // This is a generic interface for a module loader. In the astro cli this is
 // fulfilled by Vite, see vite.ts
@@ -41,6 +41,7 @@ export interface ModuleLoader {
 export interface ModuleNode {
 	id: string | null;
 	url: string;
+	file: string | null;
 	ssrModule: Record<string, any> | null;
 	ssrTransformResult: {
 		deps?: string[];

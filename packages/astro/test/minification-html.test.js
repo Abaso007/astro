@@ -1,8 +1,9 @@
-import { expect } from 'chai';
-import { loadFixture } from './test-utils.js';
+import assert from 'node:assert/strict';
+import { after, before, describe, it } from 'node:test';
 import testAdapter from './test-adapter.js';
+import { loadFixture } from './test-utils.js';
 
-const NEW_LINES = /[\r\n]+/gm;
+const NEW_LINES = /[\r\n]+/g;
 
 /**
  * The doctype declaration is on a line between the rest of the HTML in SSG.
@@ -22,7 +23,7 @@ function removeDoctypeLineInDev(html) {
 }
 
 describe('HTML minification', () => {
-	describe('in DEV enviroment', () => {
+	describe('in DEV environment', () => {
 		let fixture;
 		let devServer;
 		before(async () => {
@@ -37,23 +38,27 @@ describe('HTML minification', () => {
 		});
 
 		it('should emit compressed HTML in the emitted file', async () => {
-			let res = await fixture.fetch(`/`);
-			expect(res.status).to.equal(200);
+			let res = await fixture.fetch('/');
+			assert.equal(res.status, 200);
 			const html = await res.text();
-			expect(NEW_LINES.test(removeDoctypeLineInDev(html))).to.equal(false);
+			assert.equal(NEW_LINES.test(removeDoctypeLineInDev(html)), false);
 		});
 	});
 
 	describe('Build SSG', () => {
 		let fixture;
 		before(async () => {
-			fixture = await loadFixture({ root: './fixtures/minification-html/' });
+			fixture = await loadFixture({
+				root: './fixtures/minification-html/',
+				// test suite was authored when inlineStylesheets defaulted to never
+				build: { inlineStylesheets: 'never' },
+			});
 			await fixture.build();
 		});
 
 		it('should emit compressed HTML in the emitted file', async () => {
 			const html = await fixture.readFile('/index.html');
-			expect(NEW_LINES.test(html)).to.equal(false);
+			assert.equal(NEW_LINES.test(html), false);
 		});
 	});
 
@@ -64,6 +69,8 @@ describe('HTML minification', () => {
 				root: './fixtures/minification-html/',
 				output: 'server',
 				adapter: testAdapter(),
+				// test suite was authored when inlineStylesheets defaulted to never
+				build: { inlineStylesheets: 'never' },
 			});
 			await fixture.build();
 		});
@@ -73,7 +80,7 @@ describe('HTML minification', () => {
 			const request = new Request('http://example.com/');
 			const response = await app.render(request);
 			const html = await response.text();
-			expect(NEW_LINES.test(removeDoctypeLine(html))).to.equal(false);
+			assert.equal(NEW_LINES.test(removeDoctypeLine(html)), false);
 		});
 	});
 });

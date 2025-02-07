@@ -1,9 +1,11 @@
 import type { ExternalImageService } from 'astro';
-import { isESMImportedImage, sharedValidateOptions } from './shared';
+import { baseService } from 'astro/assets';
+import { isESMImportedImage, sharedValidateOptions } from './shared.js';
 
 const service: ExternalImageService = {
+	...baseService,
 	validateOptions: (options, serviceOptions) =>
-		sharedValidateOptions(options, serviceOptions, 'production'),
+		sharedValidateOptions(options, serviceOptions.service.config, 'production'),
 	getHTMLAttributes(options) {
 		const { inputtedWidth, ...props } = options;
 
@@ -29,7 +31,8 @@ const service: ExternalImageService = {
 			}
 		}
 
-		const { src, width, height, format, quality, ...attributes } = props;
+		const { src, width, height, format, quality, densities, widths, formats, ...attributes } =
+			options;
 
 		return {
 			...attributes,
@@ -40,8 +43,9 @@ const service: ExternalImageService = {
 		};
 	},
 	getURL(options) {
-		const fileSrc =
-			typeof options.src === 'string' ? options.src : removeLeadingForwardSlash(options.src.src);
+		const fileSrc = isESMImportedImage(options.src)
+			? removeLeadingForwardSlash(options.src.src)
+			: options.src;
 
 		const searchParams = new URLSearchParams();
 		searchParams.append('url', fileSrc);

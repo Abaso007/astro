@@ -1,12 +1,10 @@
-import { getEntry, getEntries } from 'astro:content';
+import { getEntries, getEntry } from 'astro:content';
 
-export async function get() {
+export async function GET() {
 	const welcomePost = await getEntry('blog', 'welcome');
 
 	if (!welcomePost?.data) {
-		return { 
-			body: { error: 'blog/welcome did not return `data`.' },
-		}
+		return Response.json({ error: 'blog/welcome did not return `data`.' }, { status: 404 })
 	}
 
 	const banner = await getEntry(welcomePost.data.banner);
@@ -14,12 +12,10 @@ export async function get() {
 	const rawRelatedPosts = await getEntries(welcomePost.data.relatedPosts ?? []);
 	const relatedPosts = rawRelatedPosts.map(({ render /** filter out render() function */, ...p }) => p);
 
-	return {
-		body: JSON.stringify({
-			welcomePost,
-			banner,
-			author,
-			relatedPosts,
-		})
-	}
+	return Response.json({
+		welcomePost,
+		banner,
+		author,
+		relatedPosts,
+	})
 }

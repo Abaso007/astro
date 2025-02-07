@@ -1,18 +1,24 @@
-import type { AstroComponentMetadata } from 'astro';
-import { Component as BaseComponent, h } from 'preact';
-import render from 'preact-render-to-string';
+import type { AstroComponentMetadata, NamedSSRLoadedRendererValue } from 'astro';
+import { Component as BaseComponent, type VNode, h } from 'preact';
+import { renderToStringAsync } from 'preact-render-to-string';
 import { getContext } from './context.js';
 import { restoreSignalsOnProps, serializeSignals } from './signals.js';
 import StaticHtml from './static-html.js';
-import type { AstroPreactAttrs, RendererContext } from './types';
+import type { AstroPreactAttrs, RendererContext } from './types.js';
 
 const slotName = (str: string) => str.trim().replace(/[-_]([a-z])/g, (_, w) => w.toUpperCase());
 
 let originalConsoleError: typeof console.error;
 let consoleFilterRefs = 0;
 
-function check(this: RendererContext, Component: any, props: Record<string, any>, children: any) {
+async function check(
+	this: RendererContext,
+	Component: any,
+	props: Record<string, any>,
+	children: any,
+) {
 	if (typeof Component !== 'function') return false;
+	if (Component.name === 'QwikComponent') return false;
 
 	if (Component.prototype != null && typeof Component.prototype.render === 'function') {
 		return BaseComponent.isPrototypeOf(Component);
@@ -21,19 +27,17 @@ function check(this: RendererContext, Component: any, props: Record<string, any>
 	useConsoleFilter();
 
 	try {
-		try {
-			const { html } = renderToStaticMarkup.call(this, Component, props, children, undefined);
-			if (typeof html !== 'string') {
-				return false;
-			}
-
-			// There are edge cases (SolidJS) where Preact *might* render a string,
-			// but components would be <undefined></undefined>
-
-			return !/\<undefined\>/.test(html);
-		} catch (err) {
+		const { html } = await renderToStaticMarkup.call(this, Component, props, children, undefined);
+		if (typeof html !== 'string') {
 			return false;
 		}
+
+		// There are edge cases (SolidJS) where Preact *might* render a string,
+		// but components would be <undefined></undefined>
+		// It also might render an empty sting.
+		return html == '' ? false : !html.includes('<undefined>');
+	} catch {
+		return false;
 	} finally {
 		finishUsingConsoleFilter();
 	}
@@ -44,12 +48,12 @@ function shouldHydrate(metadata: AstroComponentMetadata | undefined) {
 	return metadata?.astroStaticSlot ? !!metadata.hydrate : true;
 }
 
-function renderToStaticMarkup(
+async function renderToStaticMarkup(
 	this: RendererContext,
 	Component: any,
 	props: Record<string, any>,
 	{ default: children, ...slotted }: Record<string, any>,
-	metadata: AstroComponentMetadata | undefined
+	metadata: AstroComponentMetadata | undefined,
 ) {
 	const ctx = getContext(this.result);
 
@@ -60,7 +64,7 @@ function renderToStaticMarkup(
 			hydrate: shouldHydrate(metadata),
 			value,
 			name,
-		});
+		}) as VNode<any>;
 	}
 
 	// Restore signals back onto props so that they will be passed as-is to components
@@ -71,22 +75,19 @@ function renderToStaticMarkup(
 	const attrs: AstroPreactAttrs = {};
 	serializeSignals(ctx, props, attrs, propsMap);
 
-	const html = render(
-		h(
-			Component,
-			newProps,
-			children != null
-				? h(StaticHtml, {
-						hydrate: shouldHydrate(metadata),
-						value: children,
-				  })
-				: children
-		)
+	const vNode: VNode<any> = h(
+		Component,
+		newProps,
+		children != null
+			? h(StaticHtml, {
+					hydrate: shouldHydrate(metadata),
+					value: children,
+				})
+			: children,
 	);
-	return {
-		attrs,
-		html,
-	};
+
+	const html = await renderToStringAsync(vNode);
+	return { attrs, html };
 }
 
 /**
@@ -105,7 +106,7 @@ function useConsoleFilter() {
 
 		try {
 			console.error = filteredConsoleError;
-		} catch (error) {
+		} catch {
 			// If we're unable to hook `console.error`, just accept it
 		}
 	}
@@ -142,8 +143,11 @@ function filteredConsoleError(msg: string, ...rest: any[]) {
 	originalConsoleError(msg, ...rest);
 }
 
-export default {
+const renderer: NamedSSRLoadedRendererValue = {
+	name: '@astrojs/preact',
 	check,
 	renderToStaticMarkup,
 	supportsAstroStaticSlot: true,
 };
+
+export default renderer;

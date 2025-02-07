@@ -1,8 +1,19 @@
-import type { MiddlewareResponseHandler, Params } from '../../@types/astro';
-import { createAPIContext } from '../endpoint/index.js';
+import { createCallAction, createGetActionResult } from '../../actions/utils.js';
+import {
+	computeCurrentLocale,
+	computePreferredLocale,
+	computePreferredLocaleList,
+} from '../../i18n/utils.js';
+import type { MiddlewareHandler, Params, RewritePayload } from '../../types/public/common.js';
+import type { APIContext } from '../../types/public/context.js';
+import { ASTRO_VERSION, clientLocalsSymbol } from '../constants.js';
+import { AstroCookies } from '../cookies/index.js';
+import { AstroError, AstroErrorData } from '../errors/index.js';
+import { getClientIpAddress } from '../routing/request.js';
+import { getOriginPathname } from '../routing/rewrite.js';
 import { sequence } from './sequence.js';
 
-function defineMiddleware(fn: MiddlewareResponseHandler) {
+function defineMiddleware(fn: MiddlewareHandler) {
 	return fn;
 }
 
@@ -18,17 +29,104 @@ export type CreateContext = {
 	 * Optional parameters
 	 */
 	params?: Params;
+
+	/**
+	 * A list of locales that are supported by the user
+	 */
+	userDefinedLocales?: string[];
+
+	/**
+	 * User defined default locale
+	 */
+	defaultLocale: string;
+
+	/**
+	 * Initial value of the locals
+	 */
+	locals: App.Locals;
 };
 
 /**
  * Creates a context to be passed to Astro middleware `onRequest` function.
  */
-function createContext({ request, params }: CreateContext) {
-	return createAPIContext({
+function createContext({
+	request,
+	params = {},
+	userDefinedLocales = [],
+	defaultLocale = '',
+	locals,
+}: CreateContext): APIContext {
+	let preferredLocale: string | undefined = undefined;
+	let preferredLocaleList: string[] | undefined = undefined;
+	let currentLocale: string | undefined = undefined;
+	let clientIpAddress: string | undefined;
+	const url = new URL(request.url);
+	const route = url.pathname;
+
+	// TODO verify that this function works in an edge middleware environment
+	const rewrite = (_reroutePayload: RewritePayload) => {
+		// return dummy response
+		return Promise.resolve(new Response(null));
+	};
+	const context: Omit<APIContext, 'getActionResult' | 'callAction'> = {
+		cookies: new AstroCookies(request),
 		request,
-		params: params ?? {},
-		props: {},
+		params,
 		site: undefined,
+		generator: `Astro v${ASTRO_VERSION}`,
+		props: {},
+		rewrite,
+		routePattern: '',
+		redirect(path, status) {
+			return new Response(null, {
+				status: status || 302,
+				headers: {
+					Location: path,
+				},
+			});
+		},
+		isPrerendered: false,
+		get preferredLocale(): string | undefined {
+			return (preferredLocale ??= computePreferredLocale(request, userDefinedLocales));
+		},
+		get preferredLocaleList(): string[] | undefined {
+			return (preferredLocaleList ??= computePreferredLocaleList(request, userDefinedLocales));
+		},
+		get currentLocale(): string | undefined {
+			return (currentLocale ??= computeCurrentLocale(route, userDefinedLocales, defaultLocale));
+		},
+		url,
+		get originPathname() {
+			return getOriginPathname(request);
+		},
+		get clientAddress() {
+			if (clientIpAddress) {
+				return clientIpAddress;
+			}
+			clientIpAddress = getClientIpAddress(request);
+			if (!clientIpAddress) {
+				throw new AstroError(AstroErrorData.StaticClientAddressNotAvailable);
+			}
+			return clientIpAddress;
+		},
+		get locals() {
+			// TODO: deprecate this usage. This is used only by the edge middleware for now, so its usage should be basically none.
+			let _locals = locals ?? Reflect.get(request, clientLocalsSymbol);
+			if (locals === undefined) {
+				_locals = {};
+			}
+			if (typeof _locals !== 'object') {
+				throw new AstroError(AstroErrorData.LocalsNotAnObject);
+			}
+			return _locals;
+		},
+		set locals(_) {
+			throw new AstroError(AstroErrorData.LocalsReassigned);
+		},
+	};
+	return Object.assign(context, {
+		getActionResult: createGetActionResult(context.locals),
+		callAction: createCallAction(context),
 	});
 }
 
@@ -104,4 +202,4 @@ function trySerializeLocals(value: unknown) {
 }
 
 // NOTE: this export must export only the functions that will be exposed to user-land as officials APIs
-export { sequence, defineMiddleware, createContext, trySerializeLocals };
+export { createContext, defineMiddleware, sequence, trySerializeLocals };

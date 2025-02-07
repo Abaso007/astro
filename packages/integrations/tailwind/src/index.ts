@@ -1,12 +1,12 @@
+import { fileURLToPath } from 'node:url';
 import type { AstroIntegration } from 'astro';
 import autoprefixerPlugin from 'autoprefixer';
-import type { ResultPlugin } from 'postcss-load-config';
 import tailwindPlugin from 'tailwindcss';
 import type { CSSOptions, UserConfig } from 'vite';
 
 async function getPostCssConfig(
 	root: UserConfig['root'],
-	postcssInlineOptions: CSSOptions['postcss']
+	postcssInlineOptions: CSSOptions['postcss'],
 ) {
 	let postcssConfigResult;
 	// Check if postcss config is not inlined
@@ -15,7 +15,7 @@ async function getPostCssConfig(
 		const searchPath = typeof postcssInlineOptions === 'string' ? postcssInlineOptions : root!;
 		try {
 			postcssConfigResult = await postcssrc({}, searchPath);
-		} catch (e) {
+		} catch {
 			postcssConfigResult = null;
 		}
 	}
@@ -24,22 +24,29 @@ async function getPostCssConfig(
 
 async function getViteConfiguration(
 	tailwindConfigPath: string | undefined,
-	viteConfig: UserConfig
-) {
+	nesting: boolean,
+	root: string,
+	postcssInlineOptions: CSSOptions['postcss'],
+): Promise<Partial<UserConfig>> {
 	// We need to manually load postcss config files because when inlining the tailwind and autoprefixer plugins,
 	// that causes vite to ignore postcss config files
-	const postcssConfigResult = await getPostCssConfig(viteConfig.root, viteConfig.css?.postcss);
+	const postcssConfigResult = await getPostCssConfig(root, postcssInlineOptions);
 
 	const postcssOptions = postcssConfigResult?.options ?? {};
 	const postcssPlugins = postcssConfigResult?.plugins?.slice() ?? [];
 
-	postcssPlugins.push(tailwindPlugin(tailwindConfigPath) as ResultPlugin);
+	if (nesting) {
+		const tailwindcssNestingPlugin = (await import('tailwindcss/nesting/index.js')).default;
+		postcssPlugins.push(tailwindcssNestingPlugin());
+	}
+
+	postcssPlugins.push(tailwindPlugin(tailwindConfigPath));
 	postcssPlugins.push(autoprefixerPlugin());
 
 	return {
 		css: {
 			postcss: {
-				options: postcssOptions,
+				...postcssOptions,
 				plugins: postcssPlugins,
 			},
 		},
@@ -49,7 +56,7 @@ async function getViteConfiguration(
 type TailwindOptions = {
 	/**
 	 * Path to your tailwind config file
-	 * @default 'tailwind.config.js'
+	 * @default 'tailwind.config.mjs'
 	 */
 	configFile?: string;
 	/**
@@ -60,18 +67,30 @@ type TailwindOptions = {
 	 * @default true
 	 */
 	applyBaseStyles?: boolean;
+	/**
+	 * Add CSS nesting support using `tailwindcss/nesting`. See {@link https://tailwindcss.com/docs/using-with-preprocessors#nesting Tailwind's docs}
+	 * for how this works with `postcss-nesting` and `postcss-nested`.
+	 */
+	nesting?: boolean;
 };
 
 export default function tailwindIntegration(options?: TailwindOptions): AstroIntegration {
 	const applyBaseStyles = options?.applyBaseStyles ?? true;
 	const customConfigPath = options?.configFile;
+	const nesting = options?.nesting ?? false;
+
 	return {
 		name: '@astrojs/tailwind',
 		hooks: {
 			'astro:config:setup': async ({ config, updateConfig, injectScript }) => {
 				// Inject the Tailwind postcss plugin
 				updateConfig({
-					vite: await getViteConfiguration(customConfigPath, config.vite),
+					vite: await getViteConfiguration(
+						customConfigPath,
+						nesting,
+						fileURLToPath(config.root),
+						config.vite.css?.postcss,
+					),
 				});
 
 				if (applyBaseStyles) {

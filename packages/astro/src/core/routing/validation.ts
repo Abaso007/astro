@@ -1,8 +1,8 @@
-import { bold } from 'kleur/colors';
-import type { ComponentInstance, GetStaticPathsResult, RouteData } from '../../@types/astro';
+import type { ComponentInstance } from '../../types/astro.js';
+import type { GetStaticPathsResult } from '../../types/public/common.js';
+import type { RouteData } from '../../types/public/internal.js';
 import { AstroError, AstroErrorData } from '../errors/index.js';
-import type { LogOptions } from '../logger/core';
-import { warn } from '../logger/core.js';
+import type { Logger } from '../logger/core.js';
 
 const VALID_PARAM_TYPES = ['string', 'number', 'undefined'];
 
@@ -19,26 +19,17 @@ export function validateGetStaticPathsParameter([key, value]: [string, any], rou
 	}
 }
 
-/** Warn or error for deprecated or malformed route components */
+/** Error for deprecated or malformed route components */
 export function validateDynamicRouteModule(
 	mod: ComponentInstance,
 	{
 		ssr,
-		logging,
 		route,
 	}: {
 		ssr: boolean;
-		logging: LogOptions;
 		route: RouteData;
-	}
+	},
 ) {
-	if (ssr && mod.getStaticPaths && !route.prerender) {
-		warn(
-			logging,
-			'getStaticPaths',
-			`getStaticPaths() in ${bold(route.component)} is ignored when "output: server" is set.`
-		);
-	}
 	if ((!ssr || route.prerender) && !mod.getStaticPaths) {
 		throw new AstroError({
 			...AstroErrorData.GetStaticPathsRequired,
@@ -50,8 +41,8 @@ export function validateDynamicRouteModule(
 /** Throw error and log warnings for malformed getStaticPaths() response */
 export function validateGetStaticPathsResult(
 	result: GetStaticPathsResult,
-	logging: LogOptions,
-	route: RouteData
+	logger: Logger,
+	route: RouteData,
 ) {
 	if (!Array.isArray(result)) {
 		throw new AstroError({
@@ -64,6 +55,15 @@ export function validateGetStaticPathsResult(
 	}
 
 	result.forEach((pathObject) => {
+		if ((typeof pathObject === 'object' && Array.isArray(pathObject)) || pathObject === null) {
+			throw new AstroError({
+				...AstroErrorData.InvalidGetStaticPathsEntry,
+				message: AstroErrorData.InvalidGetStaticPathsEntry.message(
+					Array.isArray(pathObject) ? 'array' : typeof pathObject,
+				),
+			});
+		}
+
 		if (
 			pathObject.params === undefined ||
 			pathObject.params === null ||
@@ -77,32 +77,20 @@ export function validateGetStaticPathsResult(
 			});
 		}
 
-		if (typeof pathObject.params !== 'object') {
-			throw new AstroError({
-				...AstroErrorData.InvalidGetStaticPathParam,
-				message: AstroErrorData.InvalidGetStaticPathParam.message(typeof pathObject.params),
-				location: {
-					file: route.component,
-				},
-			});
-		}
-
 		// TODO: Replace those with errors? They technically don't crash the build, but users might miss the warning. - erika, 2022-11-07
 		for (const [key, val] of Object.entries(pathObject.params)) {
 			if (!(typeof val === 'undefined' || typeof val === 'string' || typeof val === 'number')) {
-				warn(
-					logging,
-					'getStaticPaths',
-					`invalid path param: ${key}. A string, number or undefined value was expected, but got \`${JSON.stringify(
-						val
-					)}\`.`
+				logger.warn(
+					'router',
+					`getStaticPaths() returned an invalid path param: "${key}". A string, number or undefined value was expected, but got \`${JSON.stringify(
+						val,
+					)}\`.`,
 				);
 			}
 			if (typeof val === 'string' && val === '') {
-				warn(
-					logging,
-					'getStaticPaths',
-					`invalid path param: ${key}. \`undefined\` expected for an optional param, but got empty string.`
+				logger.warn(
+					'router',
+					`getStaticPaths() returned an invalid path param: "${key}". \`undefined\` expected for an optional param, but got empty string.`,
 				);
 			}
 		}

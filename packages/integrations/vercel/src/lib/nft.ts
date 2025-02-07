@@ -1,25 +1,34 @@
 import { relative as relativePath } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { copyFilesToFunction } from './fs.js';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { copyFilesToFolder } from '@astrojs/internal-helpers/fs';
+import { appendForwardSlash } from '@astrojs/internal-helpers/path';
+import type { AstroIntegrationLogger } from 'astro';
+import { searchForWorkspaceRoot } from './searchRoot.js';
 
-export async function copyDependenciesToFunction({
-	entry,
-	outDir,
-	includeFiles,
-	excludeFiles,
-}: {
-	entry: URL;
-	outDir: URL;
-	includeFiles: URL[];
-	excludeFiles: URL[];
-}): Promise<{ handler: string }> {
+export async function copyDependenciesToFunction(
+	{
+		entry,
+		outDir,
+		includeFiles,
+		excludeFiles,
+		logger,
+		root,
+	}: {
+		entry: URL;
+		outDir: URL;
+		includeFiles: URL[];
+		excludeFiles: URL[];
+		logger: AstroIntegrationLogger;
+		root: URL;
+	},
+	// we want to pass the caching by reference, and not by value
+	cache: object,
+): Promise<{ handler: string }> {
 	const entryPath = fileURLToPath(entry);
+	logger.info(`Bundling function ${relativePath(fileURLToPath(outDir), entryPath)}`);
 
-	// Get root of folder of the system (like C:\ on Windows or / on Linux)
-	let base = entry;
-	while (fileURLToPath(base) !== fileURLToPath(new URL('../', base))) {
-		base = new URL('../', base);
-	}
+	// Set the base to the workspace root
+	const base = pathToFileURL(appendForwardSlash(searchForWorkspaceRoot(fileURLToPath(root))));
 
 	// The Vite bundle includes an import to `@vercel/nft` for some reason,
 	// and that trips up `@vercel/nft` itself during the adapter build. Using a
@@ -28,6 +37,7 @@ export async function copyDependenciesToFunction({
 	const { nodeFileTrace } = await import('@vercel/nft');
 	const result = await nodeFileTrace([entryPath], {
 		base: fileURLToPath(base),
+		cache,
 	});
 
 	for (const error of result.warnings) {
@@ -37,13 +47,16 @@ export async function copyDependenciesToFunction({
 			// The import(astroRemark) sometimes fails to resolve, but it's not a problem
 			if (module === '@astrojs/') continue;
 
+			// Sharp is always external and won't be able to be resolved, but that's also not a problem
+			if (module === 'sharp') continue;
+
 			if (entryPath === file) {
-				console.warn(
-					`[@astrojs/vercel] The module "${module}" couldn't be resolved. This may not be a problem, but it's worth checking.`
+				logger.debug(
+					`[@astrojs/vercel] The module "${module}" couldn't be resolved. This may not be a problem, but it's worth checking.`,
 				);
 			} else {
-				console.warn(
-					`[@astrojs/vercel] The module "${module}" inside the file "${file}" couldn't be resolved. This may not be a problem, but it's worth checking.`
+				logger.debug(
+					`[@astrojs/vercel] The module "${module}" inside the file "${file}" couldn't be resolved. This may not be a problem, but it's worth checking.`,
 				);
 			}
 		}
@@ -57,10 +70,10 @@ export async function copyDependenciesToFunction({
 		}
 	}
 
-	const commonAncestor = await copyFilesToFunction(
+	const commonAncestor = await copyFilesToFolder(
 		[...result.fileList].map((file) => new URL(file, base)).concat(includeFiles),
 		outDir,
-		excludeFiles
+		excludeFiles,
 	);
 
 	return {

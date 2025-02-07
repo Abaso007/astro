@@ -12,13 +12,14 @@ export function testImageService(config = {}) {
 	};
 }
 
-/** @type {import("../dist/@types/astro").LocalImageService} */
+/** @type {import("../dist/types/public/index.js").LocalImageService} */
 export default {
 	...baseService,
+	propertiesToHash: [...baseService.propertiesToHash, 'data-custom'],
 	getHTMLAttributes(options, serviceConfig) {
 		options['data-service'] = 'my-custom-service';
-		if (serviceConfig.foo) {
-			options['data-service-config'] = serviceConfig.foo;
+		if (serviceConfig.service.config.foo) {
+			options['data-service-config'] = serviceConfig.service.config.foo;
 		}
 		return baseService.getHTMLAttributes(options);
 	},

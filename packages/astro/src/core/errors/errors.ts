@@ -1,9 +1,9 @@
+import type { ZodError } from 'zod';
 import { codeFrame } from './printer.js';
-import { getErrorDataByTitle } from './utils.js';
 
 interface ErrorProperties {
 	title?: string;
-	name?: string;
+	name: string;
 	message?: string;
 	location?: ErrorLocation;
 	hint?: string;
@@ -19,6 +19,7 @@ export interface ErrorLocation {
 
 type ErrorTypes =
 	| 'AstroError'
+	| 'AstroUserError'
 	| 'CompilerError'
 	| 'CSSError'
 	| 'MarkdownError'
@@ -26,7 +27,7 @@ type ErrorTypes =
 	| 'AggregateError';
 
 export function isAstroError(e: unknown): e is AstroError {
-	return e instanceof Error && (e as AstroError).type === 'AstroError';
+	return e instanceof AstroError;
 }
 
 export class AstroError extends Error {
@@ -37,21 +38,12 @@ export class AstroError extends Error {
 
 	type: ErrorTypes = 'AstroError';
 
-	constructor(props: ErrorProperties, ...params: any) {
-		super(...params);
-
+	constructor(props: ErrorProperties, options?: ErrorOptions) {
 		const { name, title, message, stack, location, hint, frame } = props;
+		super(message, options);
+
 		this.title = title;
-
-		if (name && name !== 'Error') {
-			this.name = name;
-		} else if (this.title) {
-			const errorData = getErrorDataByTitle(this.title)?.name;
-
-			if (errorData) {
-				this.name = errorData;
-			}
-		}
+		this.name = name;
 
 		if (message) this.message = message;
 		// Only set this if we actually have a stack passed, otherwise uses Error's
@@ -89,10 +81,8 @@ export class AstroError extends Error {
 export class CompilerError extends AstroError {
 	type: ErrorTypes = 'CompilerError';
 
-	constructor(props: ErrorProperties, ...params: any) {
-		super(props, ...params);
-
-		this.name = 'CompilerError';
+	constructor(props: ErrorProperties, options?: ErrorOptions) {
+		super(props, options);
 	}
 
 	static is(err: unknown): err is CompilerError {
@@ -130,8 +120,8 @@ export class AggregateError extends AstroError {
 
 	// Despite being a collection of errors, AggregateError still needs to have a main error attached to it
 	// This is because Vite expects every thrown errors handled during HMR to be, well, Error and have a message
-	constructor(props: ErrorProperties & { errors: AstroError[] }, ...params: any) {
-		super(props, ...params);
+	constructor(props: ErrorProperties & { errors: AstroError[] }, options?: ErrorOptions) {
+		super(props, options);
 
 		this.errors = props.errors;
 	}
@@ -139,6 +129,23 @@ export class AggregateError extends AstroError {
 	static is(err: unknown): err is AggregateError {
 		return (err as AggregateError).type === 'AggregateError';
 	}
+}
+
+const astroConfigZodErrors = new WeakSet<ZodError>();
+
+/**
+ * Check if an error is a ZodError from an AstroConfig validation.
+ * Used to suppress formatting a ZodError if needed.
+ */
+export function isAstroConfigZodError(error: unknown): error is ZodError {
+	return astroConfigZodErrors.has(error as ZodError);
+}
+
+/**
+ * Track that a ZodError comes from an AstroConfig validation.
+ */
+export function trackAstroConfigZodError(error: ZodError): void {
+	astroConfigZodErrors.add(error);
 }
 
 /**
@@ -164,4 +171,26 @@ export interface ErrorWithMetadata {
 		column?: number;
 	};
 	cause?: any;
+}
+
+/**
+ * Special error that is exposed to users.
+ * Compared to AstroError, it contains a subset of information.
+ */
+export class AstroUserError extends Error {
+	type: ErrorTypes = 'AstroUserError';
+	/**
+	 * A message that explains to the user how they can fix the error.
+	 */
+	hint: string | undefined;
+	name = 'AstroUserError';
+	constructor(message: string, hint?: string) {
+		super();
+		this.message = message;
+		this.hint = hint;
+	}
+
+	static is(err: unknown): err is AstroUserError {
+		return (err as AstroUserError).type === 'AstroUserError';
+	}
 }

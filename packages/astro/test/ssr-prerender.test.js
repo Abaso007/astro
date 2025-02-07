@@ -1,7 +1,8 @@
-import { expect } from 'chai';
+import assert from 'node:assert/strict';
+import { before, describe, it } from 'node:test';
 import * as cheerio from 'cheerio';
-import { loadFixture } from './test-utils.js';
 import testAdapter from './test-adapter.js';
+import { loadFixture } from './test-utils.js';
 
 describe('SSR: prerender', () => {
 	/** @type {import('./test-utils').Fixture} */
@@ -11,6 +12,7 @@ describe('SSR: prerender', () => {
 		fixture = await loadFixture({
 			root: './fixtures/ssr-prerender/',
 			output: 'server',
+			outDir: './dist/normal',
 			adapter: testAdapter(),
 		});
 		await fixture.build();
@@ -23,15 +25,14 @@ describe('SSR: prerender', () => {
 			const app = await fixture.loadTestAdapterApp();
 			const request = new Request('http://example.com/static');
 			const response = await app.render(request);
-			expect(response.status).to.equal(404);
+			assert.equal(response.status, 404);
 		});
 
 		it('includes prerendered pages in the asset manifest', async () => {
 			const app = await fixture.loadTestAdapterApp();
 			/** @type {Set<string>} */
 			const assets = app.manifest.assets;
-			expect(assets.size).to.equal(1);
-			expect(Array.from(assets)[0].endsWith('static/index.html')).to.be.true;
+			assert.equal(assets.has('/static/index.html'), true);
 		});
 	});
 
@@ -40,10 +41,10 @@ describe('SSR: prerender', () => {
 			const app = await fixture.loadTestAdapterApp();
 			const request = new Request('http://example.com/users/houston');
 			const response = await app.render(request);
-			expect(response.status).to.equal(200);
+			assert.equal(response.status, 200);
 			const html = await response.text();
 			const $ = cheerio.load(html);
-			expect($('.user').text()).to.equal('houston');
+			assert.equal($('.user').text(), 'houston');
 		});
 	});
 
@@ -53,15 +54,19 @@ describe('SSR: prerender', () => {
 			const app = await fixture.loadTestAdapterApp();
 			const request = new Request('http://example.com/some');
 			const response = await app.render(request);
-			expect(response.status).to.equal(200);
+			assert.equal(response.status, 200);
 			const html = await response.text();
 			const $ = cheerio.load(html);
-			expect($('p').text()).to.include('not give 404');
+			assert.equal($('p').text().includes('not give 404'), true);
 		});
 	});
 });
 
-describe('Integrations can hook into the prerendering decision', () => {
+// NOTE: This test doesn't make sense as it relies on the fact that on the client build,
+// you can change the prerender state of pages from the SSR build, however, the client build
+// is not always guaranteed to run. If we want to support this feature, we may want to only allow
+// editing `route.prerender` on the `astro:build:done` hook.
+describe.skip('Integrations can hook into the prerendering decision', () => {
 	/** @type {import('./test-utils').Fixture} */
 	let fixture;
 
@@ -83,6 +88,7 @@ describe('Integrations can hook into the prerendering decision', () => {
 		fixture = await loadFixture({
 			root: './fixtures/ssr-prerender/',
 			output: 'server',
+			outDir: './dist/integration-prerender',
 			integrations: [testIntegration],
 			adapter: testAdapter(),
 		});
@@ -95,13 +101,13 @@ describe('Integrations can hook into the prerendering decision', () => {
 		const app = await fixture.loadTestAdapterApp();
 		const request = new Request('http://example.com/static');
 		const response = await app.render(request);
-		expect(response.status).to.equal(200);
+		assert.equal(response.status, 200);
 	});
 
 	it('An integration can turn a normal page to a prerendered one', async () => {
 		const app = await fixture.loadTestAdapterApp();
 		const request = new Request('http://example.com/not-prerendered');
 		const response = await app.render(request);
-		expect(response.status).to.equal(404);
+		assert.equal(response.status, 404);
 	});
 });

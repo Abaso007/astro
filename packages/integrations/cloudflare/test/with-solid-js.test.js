@@ -1,32 +1,37 @@
-import { loadFixture, runCLI } from './test-utils.js';
-import { expect } from 'chai';
+import * as assert from 'node:assert/strict';
+import { after, before, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import * as cheerio from 'cheerio';
+import { astroCli, wranglerCli } from './_test-utils.js';
 
-describe('With SolidJS', () => {
-	/** @type {import('./test-utils').Fixture} */
-	let fixture;
-	/** @type {import('./test-utils').WranglerCLI} */
-	let cli;
+const root = new URL('./fixtures/with-solid-js/', import.meta.url);
 
+describe('SolidJS', () => {
+	let wrangler;
 	before(async () => {
-		fixture = await loadFixture({
-			root: './fixtures/with-solid-js/',
-		});
-		await fixture.build();
+		await astroCli(fileURLToPath(root), 'build');
 
-		cli = runCLI('./fixtures/with-solid-js/', { silent: true, port: 8790 });
-		await cli.ready;
+		wrangler = wranglerCli(fileURLToPath(root));
+		await new Promise((resolve) => {
+			wrangler.stdout.on('data', (data) => {
+				// console.log('[stdout]', data.toString());
+				if (data.toString().includes('http://127.0.0.1:8788')) resolve();
+			});
+			wrangler.stderr.on('data', (_data) => {
+				// console.log('[stderr]', data.toString());
+			});
+		});
 	});
 
-	after(async () => {
-		await cli.stop();
+	after((_done) => {
+		wrangler.kill();
 	});
 
 	it('renders the solid component', async () => {
-		let res = await fetch(`http://localhost:8790/`);
-		expect(res.status).to.equal(200);
-		let html = await res.text();
-		let $ = cheerio.load(html);
-		expect($('.solid').text()).to.equal('Solid Content');
+		const res = await fetch('http://127.0.0.1:8788/');
+		assert.equal(res.status, 200);
+		const html = await res.text();
+		const $ = cheerio.load(html);
+		assert.equal($('.solid').text(), 'Solid Content');
 	});
 });

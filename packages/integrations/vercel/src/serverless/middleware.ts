@@ -1,7 +1,13 @@
-import { existsSync } from 'fs';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { builtinModules } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { ASTRO_LOCALS_HEADER } from './adapter.js';
+import type { AstroIntegrationLogger } from 'astro';
+import {
+	ASTRO_LOCALS_HEADER,
+	ASTRO_MIDDLEWARE_SECRET_HEADER,
+	ASTRO_PATH_HEADER,
+	NODE_PATH,
+} from '../index.js';
 
 /**
  * It generates the Vercel Edge Middleware file.
@@ -10,50 +16,82 @@ import { ASTRO_LOCALS_HEADER } from './adapter.js';
  *
  * Then this file gets bundled with esbuild. The bundle phase will inline the Astro middleware code.
  *
- * @param astroMiddlewareEntryPoint
+ * @param astroMiddlewareEntryPointPath
+ * @param root
+ * @param vercelEdgeMiddlewareHandlerPath
  * @param outPath
+ * @param middlewareSecret
+ * @param logger
  * @returns {Promise<URL>} The path to the bundled file
  */
 export async function generateEdgeMiddleware(
 	astroMiddlewareEntryPointPath: URL,
-	outPath: string,
-	vercelEdgeMiddlewareHandlerPath: URL
+	root: URL,
+	vercelEdgeMiddlewareHandlerPath: URL,
+	outPath: URL,
+	middlewareSecret: string,
+	logger: AstroIntegrationLogger,
 ): Promise<URL> {
-	const entryPointPathURLAsString = JSON.stringify(
-		fileURLToPath(astroMiddlewareEntryPointPath).replace(/\\/g, '/')
+	const code = edgeMiddlewareTemplate(
+		astroMiddlewareEntryPointPath,
+		vercelEdgeMiddlewareHandlerPath,
+		middlewareSecret,
+		logger,
 	);
-
-	const code = edgeMiddlewareTemplate(entryPointPathURLAsString, vercelEdgeMiddlewareHandlerPath);
 	// https://vercel.com/docs/concepts/functions/edge-middleware#create-edge-middleware
-	const bundledFilePath = join(outPath, 'middleware.mjs');
+	const bundledFilePath = fileURLToPath(outPath);
 	const esbuild = await import('esbuild');
 	await esbuild.build({
 		stdin: {
 			contents: code,
-			resolveDir: process.cwd(),
+			resolveDir: fileURLToPath(root),
 		},
-		target: 'es2020',
+		// Vercel Edge runtime targets ESNext, because Cloudflare Workers update v8 weekly
+		// https://github.com/vercel/vercel/blob/1006f2ae9d67ea4b3cbb1073e79d14d063d42436/packages/next/scripts/build-edge-function-template.js
+		target: 'esnext',
 		platform: 'browser',
+		// esbuild automatically adds the browser, import and default conditions
+		// https://esbuild.github.io/api/#conditions
 		// https://runtime-keys.proposal.wintercg.org/#edge-light
-		conditions: ['edge-light', 'worker', 'browser'],
-		external: ['astro/middleware'],
+		conditions: ['edge-light', 'workerd', 'worker'],
 		outfile: bundledFilePath,
 		allowOverwrite: true,
 		format: 'esm',
 		bundle: true,
 		minify: false,
+		// ensure node built-in modules are namespaced with `node:`
+		plugins: [
+			{
+				name: 'esbuild-namespace-node-built-in-modules',
+				setup(build) {
+					const filter = new RegExp(builtinModules.map((mod) => `(^${mod}$)`).join('|'));
+					build.onResolve({ filter }, (args) => ({ path: 'node:' + args.path, external: true }));
+				},
+			},
+		],
 	});
 	return pathToFileURL(bundledFilePath);
 }
 
-function edgeMiddlewareTemplate(middlewarePath: string, vercelEdgeMiddlewareHandlerPath: URL) {
+function edgeMiddlewareTemplate(
+	astroMiddlewareEntryPointPath: URL,
+	vercelEdgeMiddlewareHandlerPath: URL,
+	middlewareSecret: string,
+	logger: AstroIntegrationLogger,
+) {
+	const middlewarePath = JSON.stringify(
+		fileURLToPath(astroMiddlewareEntryPointPath).replace(/\\/g, '/'),
+	);
 	const filePathEdgeMiddleware = fileURLToPath(vercelEdgeMiddlewareHandlerPath);
 	let handlerTemplateImport = '';
 	let handlerTemplateCall = '{}';
 	if (existsSync(filePathEdgeMiddleware + '.js') || existsSync(filePathEdgeMiddleware + '.ts')) {
+		logger.warn(
+			'Usage of `vercel-edge-middleware.js` is deprecated. You can now use the `waitUntil(promise)` function directly as `ctx.locals.waitUntil(promise)`.',
+		);
 		const stringified = JSON.stringify(filePathEdgeMiddleware.replace(/\\/g, '/'));
 		handlerTemplateImport = `import handler from ${stringified}`;
-		handlerTemplateCall = `handler({ request, context })`;
+		handlerTemplateCall = `await handler({ request, context })`;
 	} else {
 	}
 	return `
@@ -61,21 +99,34 @@ function edgeMiddlewareTemplate(middlewarePath: string, vercelEdgeMiddlewareHand
 import { onRequest } from ${middlewarePath};
 import { createContext, trySerializeLocals } from 'astro/middleware';
 export default async function middleware(request, context) {
-	const url = new URL(request.url);
-	const ctx = createContext({ 
+	const ctx = createContext({
 		request,
 		params: {}
 	});
-	ctx.locals = ${handlerTemplateCall};
-	const next = async () => {	
-		const response = await fetch(url, {
+	Object.assign(ctx.locals, { vercel: { edge: context }, ...${handlerTemplateCall} });
+	const { origin } = new URL(request.url);
+	const next = async () => {
+		const { vercel, ...locals } = ctx.locals;
+		const response = await fetch(new URL('/${NODE_PATH}', request.url), {
 			headers: {
-				${JSON.stringify(ASTRO_LOCALS_HEADER)}: trySerializeLocals(ctx.locals)
+				...Object.fromEntries(request.headers.entries()),
+				'${ASTRO_MIDDLEWARE_SECRET_HEADER}': '${middlewareSecret}',
+				'${ASTRO_PATH_HEADER}': request.url.replace(origin, ''),
+				'${ASTRO_LOCALS_HEADER}': trySerializeLocals(locals)
 			}
 		});
-		return response;
+		return new Response(response.body, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: response.headers,
+		});
 	};
 
-	return onRequest(ctx, next);
+	const response = await onRequest(ctx, next);
+	// Append cookies from Astro.cookies
+	for(const setCookieHeaderValue of ctx.cookies.headers()) {
+		response.headers.append('set-cookie', setCookieHeaderValue);
+	}
+	return response;
 }`;
 }

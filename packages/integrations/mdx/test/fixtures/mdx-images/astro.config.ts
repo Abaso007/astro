@@ -1,12 +1,13 @@
 import mdx from '@astrojs/mdx';
 import { testImageService } from '../../../../../astro/test/test-image-service.js';
+import { defineConfig } from 'astro/config';
 
-export default {
+export default defineConfig({
 	integrations: [mdx()],
-	experimental: {
-		assets: true,
-	},
 	image: {
 		service: testImageService(),
 	},
-}
+	experimental: {
+		responsiveImages: true,
+	}
+})

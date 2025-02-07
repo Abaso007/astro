@@ -1,11 +1,8 @@
 import { defineConfig } from 'astro/config';
-import tailwind from '@astrojs/tailwind';
-import { fileURLToPath } from 'url';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
-	integrations: [
-		tailwind({
-			configFile: fileURLToPath(new URL('./tailwind.config.cjs', import.meta.url)),
-		}),
-	],
+	vite: {
+		plugins: [tailwindcss()]
+	}
 });

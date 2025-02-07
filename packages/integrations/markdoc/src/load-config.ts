@@ -1,7 +1,7 @@
-import type { AstroConfig } from 'astro';
-import { build as esbuild } from 'esbuild';
 import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import type { AstroConfig } from 'astro';
+import { build as esbuild } from 'esbuild';
 import type { AstroMarkdocConfig } from './config.js';
 import { MarkdocError } from './utils.js';
 
@@ -18,7 +18,7 @@ export type MarkdocConfigResult = {
 };
 
 export async function loadMarkdocConfig(
-	astroConfig: Pick<AstroConfig, 'root'>
+	astroConfig: Pick<AstroConfig, 'root'>,
 ): Promise<MarkdocConfigResult | undefined> {
 	let markdocConfigUrl: URL | undefined;
 	for (const filename of SUPPORTED_MARKDOC_CONFIG_FILES) {

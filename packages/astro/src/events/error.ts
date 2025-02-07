@@ -26,9 +26,9 @@ interface ConfigErrorEventPayload extends ErrorEventPayload {
  * This is only used for errors that do not come from us so we can get a basic
  * and anonymous idea of what the error is about.
  */
-const ANONYMIZE_MESSAGE_REGEX = /^(\w| )+/;
+const ANONYMIZE_MESSAGE_REGEX = /^(?:\w| )+/;
 function anonymizeErrorMessage(msg: string): string | undefined {
-	const matchedMessage = msg.match(ANONYMIZE_MESSAGE_REGEX);
+	const matchedMessage = ANONYMIZE_MESSAGE_REGEX.exec(msg);
 	if (!matchedMessage?.[0]) {
 		return undefined;
 	}
@@ -82,7 +82,7 @@ export function eventError({
 /**
  * Safely get the error message from an error, even if it's a function.
  */
-// eslint-disable-next-line @typescript-eslint/ban-types
+// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
 function getSafeErrorMessage(message: string | Function): string {
 	if (typeof message === 'string') {
 		return message;
@@ -100,12 +100,12 @@ function getSafeErrorMessage(message: string | Function): string {
 			.trim()
 			.slice(1, -1)
 			.replace(
-				/\${([^}]+)}/gm,
-				(str, match1) =>
+				/\$\{([^}]+)\}/g,
+				(_str, match1) =>
 					`${match1
 						.split(/\.?(?=[A-Z])/)
 						.join('_')
-						.toUpperCase()}`
+						.toUpperCase()}`,
 			)
 			.replace(/\\`/g, '`');
 	}

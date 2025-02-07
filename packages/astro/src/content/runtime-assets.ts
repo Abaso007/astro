@@ -1,16 +1,23 @@
 import type { PluginContext } from 'rollup';
 import { z } from 'zod';
-import { emitESMImage } from '../assets/utils/emitAsset.js';
+import type { ImageMetadata, OmitBrand } from '../assets/types.js';
+import { emitESMImage } from '../assets/utils/node/emitAsset.js';
 
-export function createImage(pluginContext: PluginContext, entryFilePath: string) {
+export function createImage(
+	pluginContext: PluginContext,
+	shouldEmitFile: boolean,
+	entryFilePath: string,
+	experimentalSvgEnabled: boolean,
+) {
 	return () => {
 		return z.string().transform(async (imagePath, ctx) => {
 			const resolvedFilePath = (await pluginContext.resolve(imagePath, entryFilePath))?.id;
-			const metadata = await emitESMImage(
+			const metadata = (await emitESMImage(
 				resolvedFilePath,
 				pluginContext.meta.watchMode,
-				pluginContext.emitFile
-			);
+				experimentalSvgEnabled,
+				shouldEmitFile ? pluginContext.emitFile : undefined,
+			)) as OmitBrand<ImageMetadata>;
 
 			if (!metadata) {
 				ctx.addIssue({
@@ -22,7 +29,7 @@ export function createImage(pluginContext: PluginContext, entryFilePath: string)
 				return z.never();
 			}
 
-			return metadata;
+			return { ...metadata, ASTRO_ASSET: metadata.fsPath };
 		});
 	};
 }

@@ -1,13 +1,10 @@
-import { bold } from 'kleur/colors';
 import type {
-	APIContext,
-	EndpointOutput,
 	MiddlewareHandler,
 	MiddlewareNext,
-} from '../../@types/astro';
+	RewritePayload,
+} from '../../types/public/common.js';
+import type { APIContext } from '../../types/public/context.js';
 import { AstroError, AstroErrorData } from '../errors/index.js';
-import { warn } from '../logger/core.js';
-import type { Environment } from '../render';
 
 /**
  * Utility function that is in charge of calling the middleware.
@@ -43,32 +40,26 @@ import type { Environment } from '../render';
  * @param apiContext The API context
  * @param responseFunction A callback function that should return a promise with the response
  */
-export async function callMiddleware<R>(
-	logging: Environment['logging'],
-	onRequest: MiddlewareHandler<R>,
+export async function callMiddleware(
+	onRequest: MiddlewareHandler,
 	apiContext: APIContext,
-	responseFunction: () => Promise<R>
-): Promise<Response | R> {
+	responseFunction: (
+		apiContext: APIContext,
+		rewritePayload?: RewritePayload,
+	) => Promise<Response> | Response,
+): Promise<Response> {
 	let nextCalled = false;
-	let responseFunctionPromise: Promise<R> | undefined = undefined;
-	const next: MiddlewareNext<R> = async () => {
+	let responseFunctionPromise: Promise<Response> | Response | undefined = undefined;
+	const next: MiddlewareNext = async (payload) => {
 		nextCalled = true;
-		responseFunctionPromise = responseFunction();
+		responseFunctionPromise = responseFunction(apiContext, payload);
+		// We need to pass the APIContext pass to `callMiddleware` because it can be mutated across middleware functions
 		return responseFunctionPromise;
 	};
 
 	let middlewarePromise = onRequest(apiContext, next);
 
 	return await Promise.resolve(middlewarePromise).then(async (value) => {
-		if (isEndpointOutput(value)) {
-			warn(
-				logging,
-				'middleware',
-				'Using simple endpoints can cause unexpected issues in the chain of middleware functions.' +
-					`\nIt's strongly suggested to use full ${bold('Response')} objects.`
-			);
-		}
-
 		// first we check if `next` was called
 		if (nextCalled) {
 			/**
@@ -84,7 +75,7 @@ export async function callMiddleware<R>(
 				if (value instanceof Response === false) {
 					throw new AstroError(AstroErrorData.MiddlewareNotAResponse);
 				}
-				return value as R;
+				return value;
 			} else {
 				/**
 				 * Here we handle the case where `next` was called and returned nothing.
@@ -107,15 +98,7 @@ export async function callMiddleware<R>(
 			throw new AstroError(AstroErrorData.MiddlewareNotAResponse);
 		} else {
 			// Middleware did not call resolve and returned a value
-			return value as R;
+			return value;
 		}
 	});
-}
-
-function isEndpointOutput(endpointResult: any): endpointResult is EndpointOutput {
-	return (
-		!(endpointResult instanceof Response) &&
-		typeof endpointResult === 'object' &&
-		typeof endpointResult.body === 'string'
-	);
 }

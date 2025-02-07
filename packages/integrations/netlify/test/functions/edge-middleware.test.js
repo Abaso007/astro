@@ -1,43 +1,66 @@
-import netlifyAdapter from '../../dist/index.js';
-import { testIntegration, loadFixture } from './test-utils.js';
-import { expect } from 'chai';
+import * as assert from 'node:assert/strict';
+import { after, before, describe, it } from 'node:test';
+import { loadFixture } from '../../../../astro/test/test-utils.js';
 
-describe('Middleware', () => {
-	it('with edge handle file, should successfully build the middleware', async () => {
-		/** @type {import('./test-utils').Fixture} */
-		const fixture = await loadFixture({
-			root: new URL('./fixtures/middleware-with-handler-file/', import.meta.url).toString(),
-			output: 'server',
-			adapter: netlifyAdapter({
-				dist: new URL('./fixtures/middleware-with-handler-file/dist/', import.meta.url),
-			}),
-			site: `http://example.com`,
-			integrations: [testIntegration()],
-			build: {
-				excludeMiddleware: true,
-			},
-		});
-		await fixture.build();
-		const contents = await fixture.readFile('../.netlify/edge-functions/edgeMiddleware.js');
-		expect(contents.includes('"Hello world"')).to.be.true;
-	});
+describe(
+	'Middleware',
+	() => {
+		const root = new URL('./fixtures/middleware/', import.meta.url);
 
-	it('without edge handle file, should successfully build the middleware', async () => {
-		/** @type {import('./test-utils').Fixture} */
-		const fixture = await loadFixture({
-			root: new URL('./fixtures/middleware-without-handler-file/', import.meta.url).toString(),
-			output: 'server',
-			adapter: netlifyAdapter({
-				dist: new URL('./fixtures/middleware-without-handler-file/dist/', import.meta.url),
-			}),
-			site: `http://example.com`,
-			integrations: [testIntegration()],
-			build: {
-				excludeMiddleware: true,
-			},
+		describe('edgeMiddleware: false', () => {
+			let fixture;
+			before(async () => {
+				process.env.EDGE_MIDDLEWARE = 'false';
+				fixture = await loadFixture({ root });
+				await fixture.build();
+			});
+
+			it('emits no edge function', async () => {
+				assert.equal(
+					fixture.pathExists('../.netlify/v1/edge-functions/middleware/middleware.mjs'),
+					false,
+				);
+			});
+
+			it('applies middleware to static files at build-time', async () => {
+				// prerendered page has middleware applied at build time
+				const prerenderedPage = await fixture.readFile('prerender/index.html');
+				assert.equal(prerenderedPage.includes('<title>Middleware</title>'), true);
+			});
+
+			after(async () => {
+				process.env.EDGE_MIDDLEWARE = undefined;
+				await fixture.clean();
+			});
 		});
-		await fixture.build();
-		const contents = await fixture.readFile('../.netlify/edge-functions/edgeMiddleware.js');
-		expect(contents.includes('"Hello world"')).to.be.false;
-	});
-});
+
+		describe('edgeMiddleware: true', () => {
+			let fixture;
+			before(async () => {
+				process.env.EDGE_MIDDLEWARE = 'true';
+				fixture = await loadFixture({ root });
+				await fixture.build();
+			});
+
+			it('emits an edge function', async () => {
+				const contents = await fixture.readFile(
+					'../.netlify/v1/edge-functions/middleware/middleware.mjs',
+				);
+				assert.equal(contents.includes('"Hello world"'), false);
+			});
+
+			it.skip('does not apply middleware during prerendering', async () => {
+				const prerenderedPage = await fixture.readFile('prerender/index.html');
+				assert.equal(prerenderedPage.includes('<title></title>'), true);
+			});
+
+			after(async () => {
+				process.env.EDGE_MIDDLEWARE = undefined;
+				await fixture.clean();
+			});
+		});
+	},
+	{
+		timeout: 120000,
+	},
+);

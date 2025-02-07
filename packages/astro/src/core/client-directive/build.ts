@@ -1,9 +1,14 @@
+import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
 /**
  * Build a client directive entrypoint into code that can directly run in a `<script>` tag.
  */
-export async function buildClientDirectiveEntrypoint(name: string, entrypoint: string) {
+export async function buildClientDirectiveEntrypoint(
+	name: string,
+	entrypoint: string | URL,
+	root: URL,
+) {
 	const stringifiedName = JSON.stringify(name);
 	const stringifiedEntrypoint = JSON.stringify(entrypoint);
 
@@ -17,9 +22,9 @@ import directive from ${stringifiedEntrypoint};
 (self.Astro || (self.Astro = {}))[${stringifiedName}] = directive;
 
 window.dispatchEvent(new Event('astro:' + ${stringifiedName}));`,
-			resolveDir: process.cwd(),
+			resolveDir: fileURLToPath(root),
 		},
-		absWorkingDir: process.cwd(),
+		absWorkingDir: fileURLToPath(root),
 		format: 'iife',
 		minify: true,
 		bundle: true,

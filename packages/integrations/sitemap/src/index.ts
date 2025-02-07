@@ -1,16 +1,12 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AstroConfig, AstroIntegration } from 'astro';
-import {
-	EnumChangefreq,
-	simpleSitemapAndIndex,
-	type LinkItem as LinkItemBase,
-	type SitemapItemLoose,
-} from 'sitemap';
-import { fileURLToPath } from 'url';
+import type { EnumChangefreq, LinkItem as LinkItemBase, SitemapItemLoose } from 'sitemap';
 import { ZodError } from 'zod';
 
 import { generateSitemap } from './generate-sitemap.js';
-import { Logger } from './utils/logger.js';
 import { validateOptions } from './validate-options.js';
+import { writeSitemap } from './write-sitemap.js';
 
 export { EnumChangefreq as ChangeFreqEnum } from 'sitemap';
 export type ChangeFreq = `${EnumChangefreq}`;
@@ -39,6 +35,8 @@ export type SitemapOptions =
 
 			// called for each sitemap item just before to save them on disk, sync or async
 			serialize?(item: SitemapItem): SitemapItem | Promise<SitemapItem | undefined> | undefined;
+
+			xslURL?: string;
 	  }
 	| undefined;
 
@@ -49,11 +47,27 @@ function formatConfigErrorMessage(err: ZodError) {
 
 const PKG_NAME = '@astrojs/sitemap';
 const OUTFILE = 'sitemap-index.xml';
-const STATUS_CODE_PAGES = new Set(['/404', '/500']);
+const STATUS_CODE_PAGES = new Set(['404', '500']);
 
+const isStatusCodePage = (locales: string[]) => {
+	const statusPathNames = new Set(
+		locales
+			.flatMap((locale) => [...STATUS_CODE_PAGES].map((page) => `${locale}/${page}`))
+			.concat([...STATUS_CODE_PAGES]),
+	);
+
+	return (pathname: string): boolean => {
+		if (pathname.endsWith('/')) {
+			pathname = pathname.slice(0, -1);
+		}
+		if (pathname.startsWith('/')) {
+			pathname = pathname.slice(1);
+		}
+		return statusPathNames.has(pathname);
+	};
+};
 const createPlugin = (options?: SitemapOptions): AstroIntegration => {
 	let config: AstroConfig;
-	const logger = new Logger(PKG_NAME);
 
 	return {
 		name: PKG_NAME,
@@ -63,11 +77,11 @@ const createPlugin = (options?: SitemapOptions): AstroIntegration => {
 				config = cfg;
 			},
 
-			'astro:build:done': async ({ dir, routes, pages }) => {
+			'astro:build:done': async ({ dir, routes, pages, logger }) => {
 				try {
 					if (!config.site) {
 						logger.warn(
-							'The Sitemap integration requires the `site` astro.config option. Skipping.'
+							'The Sitemap integration requires the `site` astro.config option. Skipping.',
 						);
 						return;
 					}
@@ -76,26 +90,19 @@ const createPlugin = (options?: SitemapOptions): AstroIntegration => {
 
 					const { filter, customPages, serialize, entryLimit } = opts;
 
-					let finalSiteUrl: URL;
-					if (config.site) {
-						finalSiteUrl = new URL(config.base, config.site);
-					} else {
-						console.warn(
-							'The Sitemap integration requires the `site` astro.config option. Skipping.'
-						);
-						return;
-					}
-
+					const finalSiteUrl = new URL(config.base, config.site);
+					const shouldIgnoreStatus = isStatusCodePage(Object.keys(opts.i18n?.locales ?? {}));
 					let pageUrls = pages
-						.filter((p) => !STATUS_CODE_PAGES.has('/' + p.pathname.slice(0, -1)))
+						.filter((p) => !shouldIgnoreStatus(p.pathname))
 						.map((p) => {
 							if (p.pathname !== '' && !finalSiteUrl.pathname.endsWith('/'))
 								finalSiteUrl.pathname += '/';
-							const path = finalSiteUrl.pathname + p.pathname;
-							return new URL(path, finalSiteUrl).href;
+							if (p.pathname.startsWith('/')) p.pathname = p.pathname.slice(1);
+							const fullPath = finalSiteUrl.pathname + p.pathname;
+							return new URL(fullPath, finalSiteUrl).href;
 						});
 
-					let routeUrls = routes.reduce<string[]>((urls, r) => {
+					const routeUrls = routes.reduce<string[]>((urls, r) => {
 						// Only expose pages, not endpoints or redirects
 						if (r.type !== 'page') return urls;
 
@@ -103,14 +110,15 @@ const createPlugin = (options?: SitemapOptions): AstroIntegration => {
 						 * Dynamic URLs have entries with `undefined` pathnames
 						 */
 						if (r.pathname) {
-							if (STATUS_CODE_PAGES.has(r.pathname)) return urls;
-							/**
-							 * remove the initial slash from relative pathname
-							 * because `finalSiteUrl` always has trailing slash
-							 */
-							const path = finalSiteUrl.pathname + r.generate(r.pathname).substring(1);
+							if (shouldIgnoreStatus(r.pathname ?? r.route)) return urls;
 
-							let newUrl = new URL(path, finalSiteUrl).href;
+							// `finalSiteUrl` may end with a trailing slash
+							// or not because of base paths.
+							let fullPath = finalSiteUrl.pathname;
+							if (fullPath.endsWith('/')) fullPath += r.generate(r.pathname).substring(1);
+							else fullPath += r.generate(r.pathname);
+
+							const newUrl = new URL(fullPath, finalSiteUrl).href;
 
 							if (config.trailingSlash === 'never') {
 								urls.push(newUrl);
@@ -161,15 +169,20 @@ const createPlugin = (options?: SitemapOptions): AstroIntegration => {
 							return;
 						}
 					}
-
-					await simpleSitemapAndIndex({
-						hostname: finalSiteUrl.href,
-						destinationDir: fileURLToPath(dir),
-						sourceData: urlData,
-						limit: entryLimit,
-						gzip: false,
-					});
-					logger.success(`\`${OUTFILE}\` is created.`);
+					const destDir = fileURLToPath(dir);
+					const xslURL = opts.xslURL ? new URL(opts.xslURL, finalSiteUrl).href : undefined;
+					await writeSitemap(
+						{
+							hostname: finalSiteUrl.href,
+							destinationDir: destDir,
+							publicBasePath: config.base,
+							sourceData: urlData,
+							limit: entryLimit,
+							xslURL: xslURL,
+						},
+						config,
+					);
+					logger.info(`\`${OUTFILE}\` created at \`${path.relative(process.cwd(), destDir)}\``);
 				} catch (err) {
 					if (err instanceof ZodError) {
 						logger.warn(formatConfigErrorMessage(err));

@@ -1,18 +1,26 @@
-import fs from 'fs';
-import type yargs from 'yargs-parser';
-import type { LogOptions } from '../../core/logger/core.js';
-import { syncCli } from '../../core/sync/index.js';
-import { loadSettings } from '../load-settings.js';
+import { printHelp } from '../../core/messages.js';
+import _sync from '../../core/sync/index.js';
+import { type Flags, flagsToAstroInlineConfig } from '../flags.js';
 
 interface SyncOptions {
-	flags: yargs.Arguments;
-	logging: LogOptions;
+	flags: Flags;
 }
 
-export async function sync({ flags, logging }: SyncOptions) {
-	const settings = await loadSettings({ cmd: 'sync', flags, logging });
-	if (!settings) return;
+export async function sync({ flags }: SyncOptions) {
+	if (flags?.help || flags?.h) {
+		printHelp({
+			commandName: 'astro sync',
+			usage: '[...flags]',
+			tables: {
+				Flags: [
+					['--force', 'Clear the content layer cache, forcing a full rebuild.'],
+					['--help (-h)', 'See all available flags.'],
+				],
+			},
+			description: `Generates TypeScript types for all Astro modules.`,
+		});
+		return 0;
+	}
 
-	const exitCode = await syncCli(settings, { logging, fs, flags });
-	return exitCode;
+	await _sync(flagsToAstroInlineConfig(flags), { telemetry: true });
 }

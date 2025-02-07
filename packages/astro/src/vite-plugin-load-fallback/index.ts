@@ -1,7 +1,8 @@
-import nodeFs from 'fs';
-import npath from 'path';
+import nodeFs from 'node:fs';
+import npath from 'node:path';
 import type * as vite from 'vite';
 import { slash } from '../core/path.js';
+import { cleanUrl } from '../vite-plugin-utils/index.js';
 
 type NodeFileSystemModule = typeof nodeFs;
 
@@ -15,7 +16,7 @@ export default function loadFallbackPlugin({
 	root,
 }: LoadFallbackPluginParams): vite.Plugin[] | false {
 	// Only add this plugin if a custom fs implementation is provided.
-	// Also check for `fs.default` because `import * as fs from 'fs'` will
+	// Also check for `fs.default` because `import * as fs from 'node:fs'` will
 	// export as so, which only it's `.default` would === `nodeFs`.
 	// @ts-expect-error check default
 	if (!fs || fs === nodeFs || fs.default === nodeFs) {
@@ -26,14 +27,14 @@ export default function loadFallbackPlugin({
 		try {
 			// await is necessary for the catch
 			return await fs.promises.readFile(cleanUrl(id), 'utf-8');
-		} catch (e) {
+		} catch {
 			try {
 				return await fs.promises.readFile(id, 'utf-8');
-			} catch (e2) {
+			} catch {
 				try {
 					const fullpath = new URL('.' + id, root);
 					return await fs.promises.readFile(fullpath, 'utf-8');
-				} catch (e3) {
+				} catch {
 					// Let fall through to the next
 				}
 			}
@@ -77,8 +78,3 @@ export default function loadFallbackPlugin({
 		},
 	];
 }
-
-const queryRE = /\?.*$/s;
-const hashRE = /#.*$/s;
-
-const cleanUrl = (url: string): string => url.replace(hashRE, '').replace(queryRE, '');

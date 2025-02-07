@@ -1,6 +1,7 @@
-import path from 'path';
-import { normalizePath, type Plugin as VitePlugin, type ResolvedConfig } from 'vite';
-import type { AstroSettings } from '../@types/astro';
+import path from 'node:path';
+import type { CompilerOptions } from 'typescript';
+import { type ResolvedConfig, type Plugin as VitePlugin, normalizePath } from 'vite';
+import type { AstroSettings } from '../types/astro.js';
 
 type Alias = {
 	find: RegExp;
@@ -12,7 +13,7 @@ const getConfigAlias = (settings: AstroSettings): Alias[] | null => {
 	const { tsConfig, tsConfigPath } = settings;
 	if (!tsConfig || !tsConfigPath || !tsConfig.compilerOptions) return null;
 
-	const { baseUrl, paths } = tsConfig.compilerOptions;
+	const { baseUrl, paths } = tsConfig.compilerOptions as CompilerOptions;
 	if (!baseUrl) return null;
 
 	// resolve the base url from the configuration file directory
@@ -27,15 +28,14 @@ const getConfigAlias = (settings: AstroSettings): Alias[] | null => {
 			const find = new RegExp(
 				`^${[...alias]
 					.map((segment) =>
-						segment === '*' ? '(.+)' : segment.replace(/[\\^$*+?.()|[\]{}]/, '\\$&')
+						segment === '*' ? '(.+)' : segment.replace(/[\\^$*+?.()|[\]{}]/, '\\$&'),
 					)
-					.join('')}$`
+					.join('')}$`,
 			);
 
-			/** Internal index used to calculate the matching id in a replacement. */
-			let matchId = 0;
-
 			for (const value of values) {
+				/** Internal index used to calculate the matching id in a replacement. */
+				let matchId = 0;
 				/** String used to replace a matched path. */
 				const replacement = [...normalizePath(path.resolve(resolvedBaseUrl, value))]
 					.map((segment) => (segment === '*' ? `$${++matchId}` : segment === '$' ? '$$' : segment))
@@ -70,7 +70,8 @@ export default function configAliasVitePlugin({
 
 	const plugin: VitePlugin = {
 		name: 'astro:tsconfig-alias',
-		enforce: 'pre',
+		// use post to only resolve ids that all other plugins before it can't
+		enforce: 'post',
 		configResolved(config) {
 			patchCreateResolver(config, plugin);
 		},
@@ -82,6 +83,14 @@ export default function configAliasVitePlugin({
 			for (const alias of configAlias) {
 				if (alias.find.test(id)) {
 					const updatedId = id.replace(alias.find, alias.replacement);
+
+					// Vite may pass an id with "*" when resolving glob import paths
+					// Returning early allows Vite to handle the final resolution
+					// See https://github.com/withastro/astro/issues/9258#issuecomment-1838806157
+					if (updatedId.includes('*')) {
+						return updatedId;
+					}
+
 					const resolved = await this.resolve(updatedId, importer, { skipSelf: true, ...options });
 					if (resolved) return resolved;
 				}
@@ -100,7 +109,7 @@ export default function configAliasVitePlugin({
  *
  * Vite may simplify this soon: https://github.com/vitejs/vite/pull/10555
  */
-function patchCreateResolver(config: ResolvedConfig, prePlugin: VitePlugin) {
+function patchCreateResolver(config: ResolvedConfig, postPlugin: VitePlugin) {
 	const _createResolver = config.createResolver;
 	// @ts-expect-error override readonly property intentionally
 	config.createResolver = function (...args1: any) {
@@ -124,15 +133,16 @@ function patchCreateResolver(config: ResolvedConfig, prePlugin: VitePlugin) {
 				ssr,
 			};
 
+			const result = await resolver.apply(_createResolver, args2);
+			if (result) return result;
+
 			// @ts-expect-error resolveId exists
-			const resolved = await prePlugin.resolveId.apply(fakePluginContext, [
+			const resolved = await postPlugin.resolveId.apply(fakePluginContext, [
 				id,
 				importer,
 				fakeResolveIdOpts,
 			]);
 			if (resolved) return resolved;
-
-			return resolver.apply(_createResolver, args2);
 		};
 	};
 }

@@ -1,13 +1,12 @@
+import { AstroError, AstroErrorData } from '../../core/errors/index.js';
 import type {
 	AstroComponentMetadata,
 	SSRElement,
 	SSRLoadedRenderer,
 	SSRResult,
-} from '../../@types/astro';
-import { AstroError, AstroErrorData } from '../../core/errors/index.js';
+} from '../../types/public/internal.js';
 import { escapeHTML } from './escape.js';
 import { serializeProps } from './serialize.js';
-import { serializeListValue } from './util.js';
 
 export interface HydrationMetadata {
 	directive: string;
@@ -16,22 +15,32 @@ export interface HydrationMetadata {
 	componentExport: { value: string };
 }
 
+type Props = Record<string | number | symbol, any>;
+
 interface ExtractedProps {
 	isPage: boolean;
 	hydration: HydrationMetadata | null;
-	props: Record<string | number | symbol, any>;
+	props: Props;
+	propsWithoutTransitionAttributes: Props;
 }
+
+const transitionDirectivesToCopyOnIsland = Object.freeze([
+	'data-astro-transition-scope',
+	'data-astro-transition-persist',
+	'data-astro-transition-persist-props',
+]);
 
 // Used to extract the directives, aka `client:load` information about a component.
 // Finds these special props and removes them from what gets passed into the component.
 export function extractDirectives(
-	inputProps: Record<string | number | symbol, any>,
-	clientDirectives: SSRResult['clientDirectives']
+	inputProps: Props,
+	clientDirectives: SSRResult['clientDirectives'],
 ): ExtractedProps {
 	let extracted: ExtractedProps = {
 		isPage: false,
 		hydration: null,
 		props: {},
+		propsWithoutTransitionAttributes: {},
 	};
 	for (const [key, value] of Object.entries(inputProps)) {
 		if (key.startsWith('server:')) {
@@ -75,7 +84,7 @@ export function extractDirectives(
 							.map((d) => `client:${d}`)
 							.join(', ');
 						throw new Error(
-							`Error: invalid hydration directive "${key}". Supported hydration methods: ${hydrationMethods}`
+							`Error: invalid hydration directive "${key}". Supported hydration methods: ${hydrationMethods}`,
 						);
 					}
 
@@ -90,17 +99,16 @@ export function extractDirectives(
 					break;
 				}
 			}
-		} else if (key === 'class:list') {
-			if (value) {
-				// support "class" from an expression passed into a component (#782)
-				extracted.props[key.slice(0, -5)] = serializeListValue(value);
-			}
 		} else {
 			extracted.props[key] = value;
+			if (!transitionDirectivesToCopyOnIsland.includes(key)) {
+				extracted.propsWithoutTransitionAttributes[key] = value;
+			}
 		}
 	}
 	for (const sym of Object.getOwnPropertySymbols(inputProps)) {
 		extracted.props[sym] = inputProps[sym];
+		extracted.propsWithoutTransitionAttributes[sym] = inputProps[sym];
 	}
 
 	return extracted;
@@ -117,15 +125,16 @@ interface HydrateScriptOptions {
 /** For hydrated components, generate a <script type="module"> to load the component */
 export async function generateHydrateScript(
 	scriptOptions: HydrateScriptOptions,
-	metadata: Required<AstroComponentMetadata>
+	metadata: Required<AstroComponentMetadata>,
 ): Promise<SSRElement> {
 	const { renderer, result, astroId, props, attrs } = scriptOptions;
 	const { hydrate, componentUrl, componentExport } = metadata;
 
 	if (!componentExport.value) {
-		throw new Error(
-			`Unable to resolve a valid export for "${metadata.displayName}"! Please open an issue at https://astro.build/issues!`
-		);
+		throw new AstroError({
+			...AstroErrorData.NoMatchingImport,
+			message: AstroErrorData.NoMatchingImport.message(metadata.displayName),
+		});
 	}
 
 	const island: SSRElement = {
@@ -149,7 +158,9 @@ export async function generateHydrateScript(
 	// Add renderer url
 	if (renderer.clientEntrypoint) {
 		island.props['component-export'] = componentExport.value;
-		island.props['renderer-url'] = await result.resolve(decodeURI(renderer.clientEntrypoint));
+		island.props['renderer-url'] = await result.resolve(
+			decodeURI(renderer.clientEntrypoint.toString()),
+		);
 		island.props['props'] = escapeHTML(serializeProps(props, metadata));
 	}
 
@@ -163,8 +174,14 @@ export async function generateHydrateScript(
 		JSON.stringify({
 			name: metadata.displayName,
 			value: metadata.hydrateArgs || '',
-		})
+		}),
 	);
+
+	transitionDirectivesToCopyOnIsland.forEach((name) => {
+		if (typeof props[name] !== 'undefined') {
+			island.props[name] = props[name];
+		}
+	});
 
 	return island;
 }

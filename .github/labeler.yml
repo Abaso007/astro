@@ -12,6 +12,9 @@
 'pkg: create-astro':
 - packages/create-astro/**
 
+'pkg: db':
+- packages/integrations/db/**
+
 'feat: markdown':
 - packages/markdown/**
 
@@ -35,3 +38,7 @@
 
 'pkg: vue':
 - packages/integrations/vue/**
+
+'docs pr':
+- packages/astro/src/types/public/**
+- packages/astro/src/core/errors/errors-data.ts

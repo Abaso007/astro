@@ -1,13 +1,12 @@
-import fs from 'fs/promises';
-import http from 'http';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { execaCommand } from 'execa';
-import { waitUntilBusy } from 'port-authority';
+import fs from 'node:fs/promises';
+import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { markdownTable } from 'markdown-table';
-import { renderFiles } from '../make-project/render-default.js';
-import { calculateStat } from '../make-project/_util.js';
-import { astroBin } from './_util.js';
+import { waitUntilBusy } from 'port-authority';
+import { exec } from 'tinyexec';
+import { renderPages } from '../make-project/render-default.js';
+import { astroBin, calculateStat } from './_util.js';
 
 const port = 4322;
 
@@ -21,15 +20,21 @@ export async function run(projectDir, outputFile) {
 	const root = fileURLToPath(projectDir);
 
 	console.log('Building...');
-	await execaCommand(`${astroBin} build`, {
-		cwd: root,
-		stdio: 'inherit',
+	await exec(astroBin, ['build'], {
+		nodeOptions: {
+			cwd: root,
+			stdio: 'inherit',
+		},
+		throwOnError: true,
 	});
 
 	console.log('Previewing...');
-	const previewProcess = execaCommand(`${astroBin} preview --port ${port}`, {
-		cwd: root,
-		stdio: 'inherit',
+	const previewProcess = exec(astroBin, ['preview', '--port', port], {
+		nodeOptions: {
+			cwd: root,
+			stdio: 'inherit',
+		},
+		throwOnError: true,
 	});
 
 	console.log('Waiting for server ready...');
@@ -55,14 +60,14 @@ export async function run(projectDir, outputFile) {
 	console.log('Done!');
 }
 
-async function benchmarkRenderTime() {
+export async function benchmarkRenderTime(portToListen = port) {
 	/** @type {Record<string, number[]>} */
 	const result = {};
-	for (const fileName of Object.keys(renderFiles)) {
+	for (const fileName of renderPages) {
 		// Render each file 100 times and push to an array
 		for (let i = 0; i < 100; i++) {
 			const pathname = '/' + fileName.slice(0, -path.extname(fileName).length);
-			const renderTime = await fetchRenderTime(`http://localhost:${port}${pathname}`);
+			const renderTime = await fetchRenderTime(`http://localhost:${portToListen}${pathname}`);
 			if (!result[pathname]) result[pathname] = [];
 			result[pathname].push(renderTime);
 		}
@@ -92,7 +97,7 @@ function printResult(result) {
 		],
 		{
 			align: ['l', 'r', 'r', 'r'],
-		}
+		},
 	);
 }
 

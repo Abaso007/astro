@@ -1,25 +1,32 @@
-import { expect } from 'chai';
-
+import * as assert from 'node:assert/strict';
+import { before, describe, it } from 'node:test';
+import * as cheerio from 'cheerio';
+import { RenderContext } from '../../../dist/core/render-context.js';
 import {
+	Fragment,
 	createComponent,
+	maybeRenderHead,
 	render,
 	renderComponent,
-	renderSlot,
-	maybeRenderHead,
 	renderHead,
-	Fragment,
+	renderSlot,
 } from '../../../dist/runtime/server/index.js';
-import { createRenderContext, tryRenderPage } from '../../../dist/core/render/index.js';
-import { createBasicEnvironment } from '../test-utils.js';
-import * as cheerio from 'cheerio';
+import { createBasicPipeline } from '../test-utils.js';
 
 const createAstroModule = (AstroComponent) => ({ default: AstroComponent });
 
 describe('core/render', () => {
 	describe('Injected head contents', () => {
-		let env;
+		let pipeline;
 		before(async () => {
-			env = createBasicEnvironment();
+			pipeline = createBasicPipeline();
+			pipeline.headElements = () => ({
+				links: new Set([
+					{ name: 'link', props: { rel: 'stylesheet', href: '/main.css' }, children: '' },
+				]),
+				scripts: new Set(),
+				styles: new Set(),
+			});
 		});
 
 		it('Multi-level layouts and head injection, with explicit head', async () => {
@@ -57,10 +64,10 @@ describe('core/render', () => {
 								{ slot: 'head' },
 								{
 									default: () => render`${renderSlot(result, slots['head'])}`,
-								}
+								},
 							)}
 						`,
-					}
+					},
 				)}
 				`;
 			});
@@ -81,28 +88,29 @@ describe('core/render', () => {
 							{ slot: 'head' },
 							{
 								default: () => render`<meta charset="utf-8">`,
-							}
+							},
 						)}
 					`,
-					}
+					},
 				)}`;
 			});
 
 			const PageModule = createAstroModule(Page);
-			const ctx = await createRenderContext({
-				request: new Request('http://example.com/'),
-				links: [{ name: 'link', props: { rel: 'stylesheet', href: '/main.css' }, children: '' }],
-				mod: PageModule,
-				env,
-			});
-
-			const response = await tryRenderPage(ctx, env, PageModule);
+			const request = new Request('http://example.com/');
+			const routeData = {
+				type: 'page',
+				pathname: '/index',
+				component: 'src/pages/index.astro',
+				params: {},
+			};
+			const renderContext = await RenderContext.create({ pipeline, request, routeData });
+			const response = await renderContext.render(PageModule);
 
 			const html = await response.text();
 			const $ = cheerio.load(html);
 
-			expect($('head link')).to.have.a.lengthOf(1);
-			expect($('body link')).to.have.a.lengthOf(0);
+			assert.equal($('head link').length, 1);
+			assert.equal($('body link').length, 0);
 		});
 
 		it('Multi-level layouts and head injection, without explicit head', async () => {
@@ -137,10 +145,10 @@ describe('core/render', () => {
 								{ slot: 'head' },
 								{
 									default: () => render`${renderSlot(result, slots['head'])}`,
-								}
+								},
 							)}
 						`,
-					}
+					},
 				)}
 				`;
 			});
@@ -161,27 +169,29 @@ describe('core/render', () => {
 							{ slot: 'head' },
 							{
 								default: () => render`<meta charset="utf-8">`,
-							}
+							},
 						)}
 					`,
-					}
+					},
 				)}`;
 			});
 
 			const PageModule = createAstroModule(Page);
-			const ctx = await createRenderContext({
-				request: new Request('http://example.com/'),
-				links: [{ name: 'link', props: { rel: 'stylesheet', href: '/main.css' }, children: '' }],
-				env,
-				mod: PageModule,
-			});
+			const request = new Request('http://example.com/');
+			const routeData = {
+				type: 'page',
+				pathname: '/index',
+				component: 'src/pages/index.astro',
+				params: {},
+			};
+			const renderContext = await RenderContext.create({ pipeline, request, routeData });
+			const response = await renderContext.render(PageModule);
 
-			const response = await tryRenderPage(ctx, env, PageModule);
 			const html = await response.text();
 			const $ = cheerio.load(html);
 
-			expect($('head link')).to.have.a.lengthOf(1);
-			expect($('body link')).to.have.a.lengthOf(0);
+			assert.equal($('head link').length, 1);
+			assert.equal($('body link').length, 0);
 		});
 
 		it('Multi-level layouts and head injection, without any content in layouts', async () => {
@@ -197,7 +207,7 @@ describe('core/render', () => {
 					{},
 					{
 						default: () => render`${renderSlot(result, slots['default'])}	`,
-					}
+					},
 				)}
 				`;
 			});
@@ -210,23 +220,25 @@ describe('core/render', () => {
 					{},
 					{
 						default: () => render`${maybeRenderHead(result)}<div>hello world</div>`,
-					}
+					},
 				)}`;
 			});
 
 			const PageModule = createAstroModule(Page);
-			const ctx = await createRenderContext({
-				request: new Request('http://example.com/'),
-				links: [{ name: 'link', props: { rel: 'stylesheet', href: '/main.css' }, children: '' }],
-				env,
-				mod: PageModule,
-			});
+			const request = new Request('http://example.com/');
+			const routeData = {
+				type: 'page',
+				pathname: '/index',
+				component: 'src/pages/index.astro',
+				params: {},
+			};
+			const renderContext = await RenderContext.create({ pipeline, request, routeData });
+			const response = await renderContext.render(PageModule);
 
-			const response = await tryRenderPage(ctx, env, PageModule);
 			const html = await response.text();
 			const $ = cheerio.load(html);
 
-			expect($('link')).to.have.a.lengthOf(1);
+			assert.equal($('link').length, 1);
 		});
 	});
 });

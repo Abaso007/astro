@@ -1,20 +1,21 @@
-/* eslint-disable no-console */
 import * as colors from 'kleur/colors';
 import yargs from 'yargs-parser';
 import { ASTRO_VERSION } from '../core/constants.js';
-import type { LogOptions } from '../core/logger/core.js';
 
 type CLICommand =
 	| 'help'
 	| 'version'
 	| 'add'
+	| 'create-key'
 	| 'docs'
 	| 'dev'
 	| 'build'
 	| 'preview'
+	| 'db'
 	| 'sync'
 	| 'check'
 	| 'info'
+	| 'preferences'
 	| 'telemetry';
 
 /** Display --help flag */
@@ -29,12 +30,20 @@ async function printAstroHelp() {
 				['add', 'Add an integration.'],
 				['build', 'Build your project and write it to disk.'],
 				['check', 'Check your project for errors.'],
+				['create-key', 'Create a cryptography key'],
+				['db', 'Manage your Astro database.'],
 				['dev', 'Start the development server.'],
 				['docs', 'Open documentation in your web browser.'],
 				['info', 'List info about your current Astro setup.'],
 				['preview', 'Preview your build locally.'],
 				['sync', 'Generate content collection types.'],
+				['preferences', 'Configure user preferences.'],
 				['telemetry', 'Configure telemetry settings.'],
+			],
+			'Studio Commands': [
+				['login', 'Authenticate your machine with Astro Studio.'],
+				['logout', 'End your authenticated session with Astro Studio.'],
+				['link', 'Link this project directory to an Astro Studio project.'],
 			],
 			'Global Flags': [
 				['--config <path>', 'Specify your config file.'],
@@ -65,12 +74,19 @@ function resolveCommand(flags: yargs.Arguments): CLICommand {
 		'add',
 		'sync',
 		'telemetry',
+		'preferences',
 		'dev',
 		'build',
 		'preview',
 		'check',
+		'create-key',
 		'docs',
+		'db',
 		'info',
+		'login',
+		'logout',
+		'link',
+		'init',
 	]);
 	if (supportedCommands.has(cmd)) {
 		return cmd as CLICommand;
@@ -97,6 +113,11 @@ async function runCommand(cmd: string, flags: yargs.Arguments) {
 			await printInfo({ flags });
 			return;
 		}
+		case 'create-key': {
+			const { createKey } = await import('./create-key/index.js');
+			const exitCode = await createKey({ flags });
+			return process.exit(exitCode);
+		}
 		case 'docs': {
 			const { docs } = await import('./docs/index.js');
 			await docs({ flags });
@@ -110,24 +131,27 @@ async function runCommand(cmd: string, flags: yargs.Arguments) {
 			await update(subcommand, { flags });
 			return;
 		}
+		case 'sync': {
+			const { sync } = await import('./sync/index.js');
+			await sync({ flags });
+			return;
+		}
+		case 'preferences': {
+			const { preferences } = await import('./preferences/index.js');
+			const [subcommand, key, value] = flags._.slice(3).map((v) => v.toString());
+			const exitCode = await preferences(subcommand, key, value, { flags });
+			return process.exit(exitCode);
+		}
 	}
 
-	const { enableVerboseLogging, nodeLogDestination } = await import('../core/logger/node.js');
-	const logging: LogOptions = {
-		dest: nodeLogDestination,
-		level: 'info',
-	};
+	// In verbose/debug mode, we log the debug logs asap before any potential errors could appear
 	if (flags.verbose) {
-		logging.level = 'debug';
+		const { enableVerboseLogging } = await import('../core/logger/node.js');
 		enableVerboseLogging();
-	} else if (flags.silent) {
-		logging.level = 'silent';
 	}
 
-	// Start with a default NODE_ENV so Vite doesn't set an incorrect default when loading the Astro config
-	if (!process.env.NODE_ENV) {
-		process.env.NODE_ENV = cmd === 'dev' ? 'development' : 'production';
-	}
+	const { notify } = await import('./telemetry/index.js');
+	await notify();
 
 	// These commands uses the logging and user config. All commands are assumed to have been handled
 	// by the end of this switch statement.
@@ -135,12 +159,21 @@ async function runCommand(cmd: string, flags: yargs.Arguments) {
 		case 'add': {
 			const { add } = await import('./add/index.js');
 			const packages = flags._.slice(3) as string[];
-			await add(packages, { flags, logging });
+			await add(packages, { flags });
+			return;
+		}
+		case 'db':
+		case 'login':
+		case 'logout':
+		case 'link':
+		case 'init': {
+			const { db } = await import('./db/index.js');
+			await db({ flags });
 			return;
 		}
 		case 'dev': {
 			const { dev } = await import('./dev/index.js');
-			const server = await dev({ flags, logging });
+			const server = await dev({ flags });
 			if (server) {
 				return await new Promise(() => {}); // lives forever
 			}
@@ -148,12 +181,12 @@ async function runCommand(cmd: string, flags: yargs.Arguments) {
 		}
 		case 'build': {
 			const { build } = await import('./build/index.js');
-			await build({ flags, logging });
+			await build({ flags });
 			return;
 		}
 		case 'preview': {
 			const { preview } = await import('./preview/index.js');
-			const server = await preview({ flags, logging });
+			const server = await preview({ flags });
 			if (server) {
 				return await server.closed(); // keep alive until the server is closed
 			}
@@ -161,23 +194,12 @@ async function runCommand(cmd: string, flags: yargs.Arguments) {
 		}
 		case 'check': {
 			const { check } = await import('./check/index.js');
-			// We create a server to start doing our operations
-			const checkServer = await check({ flags, logging });
-			if (checkServer) {
-				if (checkServer.isWatchMode) {
-					await checkServer.watch();
-					return await new Promise(() => {}); // lives forever
-				} else {
-					const checkResult = await checkServer.check();
-					return process.exit(checkResult);
-				}
+			const checkServer = await check(flags);
+			if (flags.watch) {
+				return await new Promise(() => {}); // lives forever
+			} else {
+				return process.exit(checkServer ? 1 : 0);
 			}
-			return;
-		}
-		case 'sync': {
-			const { sync } = await import('./sync/index.js');
-			const exitCode = await sync({ flags, logging });
-			return process.exit(exitCode);
 		}
 	}
 
@@ -186,8 +208,8 @@ async function runCommand(cmd: string, flags: yargs.Arguments) {
 }
 
 /** The primary CLI action */
-export async function cli(args: string[]) {
-	const flags = yargs(args);
+export async function cli(argv: string[]) {
+	const flags = yargs(argv, { boolean: ['global'], alias: { g: 'global' } });
 	const cmd = resolveCommand(flags);
 	try {
 		await runCommand(cmd, flags);

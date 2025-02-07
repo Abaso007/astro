@@ -1,7 +1,7 @@
 import { expect } from '@playwright/test';
 import { testFactory, waitForHydrate } from './test-utils.js';
 
-const test = testFactory({ root: './fixtures/ts-resolution/' });
+const test = testFactory(import.meta.url, { root: './fixtures/ts-resolution/' });
 
 function runTest(it) {
 	it('client:idle', async ({ page, astro }) => {
@@ -24,35 +24,31 @@ function runTest(it) {
 
 test.describe('TypeScript resolution -', () => {
 	test.describe('Development', () => {
-		const t = test.extend({});
-
 		let devServer;
 
-		t.beforeAll(async ({ astro }) => {
+		test.beforeAll(async ({ astro }) => {
 			devServer = await astro.startDevServer();
 		});
 
-		t.afterAll(async () => {
+		test.afterAll(async () => {
 			await devServer.stop();
 		});
 
-		runTest(t);
+		runTest(test);
 	});
 
 	test.describe('Production', () => {
-		const t = test.extend({});
-
 		let previewServer;
 
-		t.beforeAll(async ({ astro }) => {
+		test.beforeAll(async ({ astro }) => {
 			await astro.build();
 			previewServer = await astro.preview();
 		});
 
-		t.afterAll(async () => {
+		test.afterAll(async () => {
 			await previewServer.stop();
 		});
 
-		runTest(t);
+		runTest(test);
 	});
 });

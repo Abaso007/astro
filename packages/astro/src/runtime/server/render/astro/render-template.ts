@@ -1,9 +1,8 @@
-import type { RenderInstruction } from '../types';
-
-import { HTMLBytes, markHTMLString } from '../../escape.js';
+import { markHTMLString } from '../../escape.js';
 import { isPromise } from '../../util.js';
 import { renderChild } from '../any.js';
-import { bufferIterators } from '../util.js';
+import type { RenderDestination } from '../common.js';
+import { renderToBufferDestination } from '../util.js';
 
 const renderTemplateResultSym = Symbol.for('astro.renderTemplateResult');
 
@@ -12,7 +11,7 @@ const renderTemplateResultSym = Symbol.for('astro.renderTemplateResult');
 export class RenderTemplateResult {
 	public [renderTemplateResultSym] = true;
 	private htmlParts: TemplateStringsArray;
-	private expressions: any[];
+	public expressions: any[];
 	private error: Error | undefined;
 	constructor(htmlParts: TemplateStringsArray, expressions: unknown[]) {
 		this.htmlParts = htmlParts;
@@ -33,17 +32,24 @@ export class RenderTemplateResult {
 		});
 	}
 
-	async *[Symbol.asyncIterator]() {
-		const { htmlParts, expressions } = this;
+	async render(destination: RenderDestination) {
+		// Render all expressions eagerly and in parallel
+		const expRenders = this.expressions.map((exp) => {
+			return renderToBufferDestination((bufferDestination) => {
+				// Skip render if falsy, except the number 0
+				if (exp || exp === 0) {
+					return renderChild(bufferDestination, exp);
+				}
+			});
+		});
 
-		let iterables = bufferIterators(expressions.map((e) => renderChild(e)));
-		for (let i = 0; i < htmlParts.length; i++) {
-			const html = htmlParts[i];
-			const iterable = iterables[i];
+		for (let i = 0; i < this.htmlParts.length; i++) {
+			const html = this.htmlParts[i];
+			const expRender = expRenders[i];
 
-			yield markHTMLString(html);
-			if (iterable) {
-				yield* iterable;
+			destination.write(markHTMLString(html));
+			if (expRender) {
+				await expRender.renderToFinalDestination(destination);
 			}
 		}
 	}
@@ -51,28 +57,7 @@ export class RenderTemplateResult {
 
 // Determines if a component is an .astro component
 export function isRenderTemplateResult(obj: unknown): obj is RenderTemplateResult {
-	return typeof obj === 'object' && !!(obj as any)[renderTemplateResultSym];
-}
-
-export async function* renderAstroTemplateResult(
-	component: RenderTemplateResult
-): AsyncIterable<string | HTMLBytes | RenderInstruction> {
-	for await (const value of component) {
-		if (value || value === 0) {
-			for await (const chunk of renderChild(value)) {
-				switch (chunk.type) {
-					case 'directive': {
-						yield chunk;
-						break;
-					}
-					default: {
-						yield markHTMLString(chunk);
-						break;
-					}
-				}
-			}
-		}
-	}
+	return typeof obj === 'object' && obj !== null && !!(obj as any)[renderTemplateResultSym];
 }
 
 export function renderTemplate(htmlParts: TemplateStringsArray, ...expressions: any[]) {

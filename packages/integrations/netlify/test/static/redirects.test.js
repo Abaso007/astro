@@ -1,53 +1,34 @@
-import { expect } from 'chai';
-import { loadFixture, testIntegration } from './test-utils.js';
-import { netlifyStatic } from '../../dist/index.js';
+import * as assert from 'node:assert/strict';
+import { before, describe, it } from 'node:test';
+import { loadFixture } from '../../../../astro/test/test-utils.js';
 
 describe('SSG - Redirects', () => {
-	/** @type {import('../../../astro/test/test-utils').Fixture} */
 	let fixture;
 
 	before(async () => {
-		fixture = await loadFixture({
-			root: new URL('./fixtures/redirects/', import.meta.url).toString(),
-			output: 'static',
-			adapter: netlifyStatic(),
-			experimental: {
-				redirects: true,
-			},
-			site: `http://example.com`,
-			integrations: [testIntegration()],
-			redirects: {
-				'/other': '/',
-				'/two': {
-					status: 302,
-					destination: '/',
-				},
-				'/blog/[...slug]': '/team/articles/[...slug]',
-			},
-		});
+		fixture = await loadFixture({ root: new URL('./fixtures/redirects/', import.meta.url) });
 		await fixture.build();
 	});
 
 	it('Creates a redirects file', async () => {
-		let redirects = await fixture.readFile('/_redirects');
-		let parts = redirects.split(/\s+/);
-		expect(parts).to.deep.equal([
+		const redirects = await fixture.readFile('./_redirects');
+		const parts = redirects.split(/\s+/);
+		assert.deepEqual(parts, [
+			'',
+
 			'/two',
 			'/',
 			'302',
+
 			'/other',
-			'/',
-			'301',
-			'/nope',
 			'/',
 			'301',
 
 			'/blog/*',
 			'/team/articles/*/index.html',
 			'301',
-			'/team/articles/*',
-			'/team/articles/*/index.html',
-			'200',
+
+			'',
 		]);
 	});
 });

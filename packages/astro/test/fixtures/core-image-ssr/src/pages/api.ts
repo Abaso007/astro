@@ -1,10 +1,7 @@
-import { APIRoute } from "../../../../../src/@types/astro";
+import type { APIRoute } from "astro"
 
-export const get = (async ({ params, request }) => {
+export const GET = (async ({ params, request }) => {
 	const url = new URL(request.url);
   const src = url.searchParams.get("src");
-
-	return {
-		body: "An image: " + JSON.stringify(src),
-	};
+	return new Response("An image: " + JSON.stringify(src));
 }) satisfies APIRoute;

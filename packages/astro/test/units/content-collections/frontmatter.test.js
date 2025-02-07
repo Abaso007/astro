@@ -1,34 +1,16 @@
-import { fileURLToPath } from 'node:url';
-import nodeFS from 'node:fs';
-import path from 'node:path';
-
-import { runInContainer } from '../../../dist/core/dev/index.js';
+import { describe, it } from 'node:test';
 import { attachContentServerListeners } from '../../../dist/content/index.js';
-import { createFs, triggerFSEvent } from '../test-utils.js';
-
-const root = new URL('../../fixtures/alias/', import.meta.url);
-
-function getTypesDts() {
-	const typesdtsURL = new URL('../../../content-types.template.d.ts', import.meta.url);
-	const relpath = path
-		.relative(fileURLToPath(root), fileURLToPath(typesdtsURL))
-		.replace(/\\/g, '/');
-	return {
-		[relpath]: nodeFS.readFileSync(typesdtsURL, 'utf-8'),
-	};
-}
+import { createFixture, runInContainer } from '../test-utils.js';
 
 describe('frontmatter', () => {
 	it('errors in content/ does not crash server', async () => {
-		const fs = createFs(
-			{
-				...getTypesDts(),
-				'/src/content/posts/blog.md': `
+		const fixture = await createFixture({
+			'/src/content/posts/blog.md': `\
 					---
 					title: One
 					---
 				`,
-				'/src/content/config.ts': `
+			'/src/content.config.ts': `\
 					import { defineCollection, z } from 'astro:content';
 
 					const posts = defineCollection({
@@ -39,7 +21,7 @@ describe('frontmatter', () => {
 						posts
 					};
 				`,
-				'/src/pages/index.astro': `
+			'/src/pages/index.astro': `\
 					---
 					---
 					<html>
@@ -49,23 +31,20 @@ describe('frontmatter', () => {
 						</body>
 					</html>
 				`,
-			},
-			root
-		);
+		});
 
-		await runInContainer({ fs, root }, async (container) => {
+		await runInContainer({ inlineConfig: { root: fixture.path } }, async (container) => {
 			await attachContentServerListeners(container);
 
-			fs.writeFileFromRootSync(
+			await fixture.writeFile(
 				'/src/content/posts/blog.md',
 				`
 				---
 				title: One
 				title: two
 				---
-				`
+				`,
 			);
-			triggerFSEvent(container, fs, '/src/content/posts/blog.md', 'change');
 			await new Promise((resolve) => setTimeout(resolve, 100));
 			// Note, if we got here, it didn't crash
 		});
